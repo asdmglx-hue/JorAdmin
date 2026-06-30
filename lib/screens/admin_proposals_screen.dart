@@ -1,0 +1,620 @@
+import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/services.dart';
+import '../utils/theme.dart';
+import '../services/admin_service.dart';
+import '../models/admin_models.dart';
+import 'admin_edit_user_screen.dart';
+import 'admin_trash_screen.dart';
+
+// ── Responsive scale helper ────────────────────────────────────────────────
+class _S {
+  final double scale;
+  const _S(this.scale);
+  double f(double size) => size * scale;
+  double s(double size) => size * scale;
+  double d(double size) => size * scale;
+  static _S of(BuildContext context) {
+    final w = MediaQuery.of(context).size.width;
+    final scale = (w / 390.0).clamp(0.72, 1.0);
+    return _S(scale);
+  }
+}
+
+class AdminProposalsScreen extends StatefulWidget {
+  final AdminService svc;
+  const AdminProposalsScreen({super.key, required this.svc});
+  @override State<AdminProposalsScreen> createState() => _AdminProposalsScreenState();
+}
+
+class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
+  bool _showApproved = false;
+  String _search = '';
+  final _searchCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.svc,
+      builder: (_, __) {
+        final q = _search.toLowerCase();
+        final allPending = widget.svc.users.where((u) => u.status == ProposalStatus.pending).toList();
+        final allApproved = widget.svc.users.where((u) => u.status == ProposalStatus.approved || u.status == ProposalStatus.active).toList();
+        final numSearch = _search.startsWith('#') ? int.tryParse(_search.substring(1)) : null;
+        final list = (_showApproved ? allApproved : allPending).where((u) =>
+          q.isEmpty ||
+          u.name.toLowerCase().contains(q) ||
+          (u.cnic ?? '').toLowerCase().contains(q) ||
+          (numSearch != null && u.proposalNumber == numSearch)
+        ).toList();
+
+        return Column(
+          children: [
+            // ── Toggle + Search ──
+            Padding(
+              padding: EdgeInsets.fromLTRB(_S.of(context).s(16), _S.of(context).s(12), _S.of(context).s(16), 0),
+              child: Column(
+                children: [
+                  // Toggle
+                  Row(
+                    children: [
+                      Expanded(child: GestureDetector(
+                        onTap: () => setState(() => _showApproved = false),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: EdgeInsets.symmetric(vertical: _S.of(context).s(9)),
+                          decoration: BoxDecoration(
+                            color: !_showApproved ? kPurple : Colors.transparent,
+                            borderRadius: BorderRadius.circular(_S.of(context).s(10)),
+                            border: Border.all(color: !_showApproved ? kPurple : Colors.white.withOpacity(0.1)),
+                          ),
+                          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+
+                            SizedBox(width: _S.of(context).s(6)),
+                            Text('Pending (${allPending.length})',
+                              style: TextStyle(fontSize: _S.of(context).f(12.5), fontWeight: FontWeight.w700,
+                                color: !_showApproved ? Colors.white : Colors.white38)),
+                          ]),
+                        ),
+                      )),
+                      SizedBox(width: _S.of(context).s(8)),
+                      Expanded(child: GestureDetector(
+                        onTap: () => setState(() => _showApproved = true),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: EdgeInsets.symmetric(vertical: _S.of(context).s(9)),
+                          decoration: BoxDecoration(
+                            color: _showApproved ? kPurple : Colors.transparent,
+                            borderRadius: BorderRadius.circular(_S.of(context).s(10)),
+                            border: Border.all(color: _showApproved ? kPurple : Colors.white.withOpacity(0.1)),
+                          ),
+                          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+
+                            SizedBox(width: _S.of(context).s(6)),
+                            Text('Approved (${allApproved.length})',
+                              style: TextStyle(fontSize: _S.of(context).f(12.5), fontWeight: FontWeight.w700,
+                                color: _showApproved ? Colors.white : Colors.white38)),
+                          ]),
+                        ),
+                      )),
+                    ],
+                  ),
+                  SizedBox(height: _S.of(context).s(10)),
+                  // Search bar
+                  Container(
+                    height: _S.of(context).d(42),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF16132A),
+                      borderRadius: BorderRadius.circular(_S.of(context).s(12)),
+                      border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    ),
+                    child: TextField(
+                      controller: _searchCtrl,
+                      onChanged: (v) => setState(() => _search = v),
+                      style: TextStyle(color: Colors.white, fontSize: _S.of(context).f(13.5)),
+                      decoration: InputDecoration(
+                        hintText: 'Search by name, CNIC or #number...',
+                        hintStyle: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: _S.of(context).f(13)),
+                        prefixIcon: Icon(Icons.search_rounded, color: Colors.white.withOpacity(0.3), size: _S.of(context).d(18)),
+                        suffixIcon: _search.isNotEmpty
+                            ? GestureDetector(
+                                onTap: () { _searchCtrl.clear(); setState(() => _search = ''); },
+                                child: Icon(Icons.close_rounded, color: Colors.white.withOpacity(0.3), size: _S.of(context).d(16)),
+                              )
+                            : null,
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(vertical: _S.of(context).s(11)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // ── List ──
+            Expanded(
+              child: list.isEmpty
+                ? Center(
+                    child: Text(
+                      _search.isNotEmpty ? 'No results found' : (_showApproved ? 'No approved proposals' : 'No pending proposals'),
+                      style: TextStyle(fontSize: _S.of(context).f(13), color: Colors.white.withOpacity(0.3)),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: EdgeInsets.fromLTRB(_S.of(context).s(16), _S.of(context).s(12), _S.of(context).s(16), _S.of(context).s(20)),
+                    itemCount: list.length,
+                    itemBuilder: (_, i) {
+                      final u = list[i];
+                      if (_showApproved) {
+                        return _ApprovedCard(user: u, svc: widget.svc, onView: () async {
+                          await Navigator.push(context,
+                            MaterialPageRoute(builder: (_) => AdminEditUserScreen(user: u, svc: widget.svc)));
+                          widget.svc.notifyListeners();
+                        });
+                      }
+                      return _PendingCard(
+                        user: u,
+                        svc: widget.svc,
+                        onEdit: () async {
+                          await Navigator.push(context,
+                            MaterialPageRoute(builder: (_) => AdminEditUserScreen(user: u, svc: widget.svc)));
+                          widget.svc.notifyListeners();
+                        },
+                      );
+                    },
+                  ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// ── Section Header ─────────────────────────────────────────────────────────────
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final int count;
+  final Color color;
+  const _SectionHeader({required this.title, required this.count, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Text(title, style: TextStyle(fontSize: _S.of(context).f(15), fontWeight: FontWeight.w700, color: Colors.white)),
+        SizedBox(width: _S.of(context).s(8)),
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(8), vertical: _S.of(context).s(2)),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(_S.of(context).s(10)),
+          ),
+          child: Text(count.toString(), style: TextStyle(fontSize: _S.of(context).f(11), fontWeight: FontWeight.w700, color: color)),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Pending Review Card ────────────────────────────────────────────────────────
+class _ApprovedCard extends StatelessWidget {
+  final AdminUser user;
+  final AdminService svc;
+  final VoidCallback onView;
+  const _ApprovedCard({required this.user, required this.svc, required this.onView});
+
+  String _timeAgo(DateTime d) {
+    final local = d.isUtc ? d.toLocal() : d;
+    final diff = DateTime.now().difference(local);
+    final mins = diff.inMinutes.abs();
+    final hours = diff.inHours.abs();
+    final days = diff.inDays.abs();
+    if (mins < 1) return 'just now';
+    if (mins < 60) return '${mins}m ago';
+    if (hours < 24) return '${hours}h ago';
+    if (days < 30) return '${days}d ago';
+    final months = (days / 30).floor();
+    if (months < 12) return '${months}mo ago';
+    final years = (days / 365).floor();
+    return '${years}y ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: EdgeInsets.only(bottom: _S.of(context).s(10)),
+      padding: EdgeInsets.all(_S.of(context).s(14)),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16132A),
+        borderRadius: BorderRadius.circular(_S.of(context).s(16)),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _MiniAvatar(user: user),
+              SizedBox(width: _S.of(context).s(10)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Flexible(
+                        child: Text(user.name,
+                            style: TextStyle(fontSize: _S.of(context).f(14), fontWeight: FontWeight.w700, color: Colors.white),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      SizedBox(width: _S.of(context).s(6)),
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(7), vertical: _S.of(context).s(2)),
+                        decoration: BoxDecoration(
+                          color: kGreen.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(_S.of(context).s(7)),
+                        ),
+                        child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.shopping_cart_rounded, size: _S.of(context).d(10), color: kGreen),
+                              SizedBox(width: _S.of(context).s(3)),
+                              Text('Approved',
+                                  style: TextStyle(fontSize: _S.of(context).f(10), fontWeight: FontWeight.w700, color: kGreen)),
+                            ],
+                          ),
+                      ),
+                      if (user.adminNotes == 'AI_IMPORTED') ...[ 
+                        SizedBox(width: _S.of(context).s(4)),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(6), vertical: _S.of(context).s(2)),
+                          decoration: BoxDecoration(
+                            color: kPurple.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(_S.of(context).s(7)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.auto_awesome, size: _S.of(context).d(9), color: kPurple),
+                              SizedBox(width: _S.of(context).s(3)),
+                              Text('AI', style: TextStyle(fontSize: _S.of(context).f(10), fontWeight: FontWeight.w700, color: kPurple)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ]),
+                    SizedBox(height: _S.of(context).s(2)),
+                    if (user.cnic != null && user.cnic!.isNotEmpty)
+                      Text(user.cnic!, style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.4)))
+                    else if (user.adminNotes == 'AI_IMPORTED' && user.proposalNumber != null)
+                      Text('#${user.proposalNumber}', style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.35)))
+                    else
+                      Text('Proposal # not set', style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.2))),
+
+                  ],
+                ),
+              ),
+              Builder(builder: (ctx) => GestureDetector(
+                onTap: () => Navigator.push(ctx, MaterialPageRoute(
+                  builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: true))),
+                child: Container(
+                  width: _S.of(context).d(28), height: _S.of(context).d(28),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(_S.of(context).s(8)),
+                  ),
+                  child: Icon(Icons.remove_red_eye_outlined,
+                      size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
+                ),
+              )),
+            ],
+          ),
+          SizedBox(height: _S.of(context).s(12)),
+          _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
+          _DetailRow(icon: Icons.calendar_today_rounded, label: 'Approved ${_timeAgo(user.subscriptionStart ?? user.postedAt)}'),
+          SizedBox(height: _S.of(context).s(12)),
+          _ActBtn(
+            label: 'Edit Profile',
+            icon: Icons.edit_rounded,
+            color: kPurple,
+            onTap: onView,
+          ),
+        ],
+      ),
+    );
+  }
+}
+class _PendingCard extends StatelessWidget {
+  final AdminUser user;
+  final AdminService svc;
+  final VoidCallback onEdit;
+  const _PendingCard({required this.user, required this.svc, required this.onEdit});
+
+  String _expiryDate() {
+    final expiry = DateTime.now().add(const Duration(days: 90));
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${expiry.day} ${months[expiry.month - 1]} ${expiry.year}';
+  }
+
+  String _timeAgo(DateTime d) {
+    final local = d.isUtc ? d.toLocal() : d;
+    final diff = DateTime.now().difference(local);
+    final mins = diff.inMinutes.abs();
+    final hours = diff.inHours.abs();
+    final days = diff.inDays.abs();
+    if (mins < 1) return 'just now';
+    if (mins < 60) return '${mins}m ago';
+    if (hours < 24) return '${hours}h ago';
+    if (days < 30) return '${days}d ago';
+    final months = (days / 30).floor();
+    if (months < 12) return '${months}mo ago';
+    final years = (days / 365).floor();
+    return '${years}y ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: EdgeInsets.only(bottom: _S.of(context).s(10)),
+      padding: EdgeInsets.all(_S.of(context).s(14)),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16132A),
+        borderRadius: BorderRadius.circular(_S.of(context).s(16)),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Name + status inline
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _MiniAvatar(user: user),
+              SizedBox(width: _S.of(context).s(10)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(user.name,
+                              style: TextStyle(fontSize: _S.of(context).f(14), fontWeight: FontWeight.w700, color: Colors.white),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        SizedBox(width: _S.of(context).s(6)),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(7), vertical: _S.of(context).s(2)),
+                          decoration: BoxDecoration(
+                            color: kAmber.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(_S.of(context).s(7)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.shopping_cart_rounded, size: _S.of(context).d(10), color: kAmber),
+                              SizedBox(width: _S.of(context).s(3)),
+                              Text('Pending',
+                                  style: TextStyle(fontSize: _S.of(context).f(10), fontWeight: FontWeight.w700, color: kAmber)),
+                            ],
+                          ),
+                        ),
+                        if (user.adminNotes == 'AI_IMPORTED') ...[
+                          SizedBox(width: _S.of(context).s(4)),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(6), vertical: _S.of(context).s(2)),
+                            decoration: BoxDecoration(
+                              color: kPurple.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(_S.of(context).s(7)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.auto_awesome, size: _S.of(context).d(9), color: kPurple),
+                                SizedBox(width: _S.of(context).s(3)),
+                                Text('AI', style: TextStyle(fontSize: _S.of(context).f(10), fontWeight: FontWeight.w700, color: kPurple)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    SizedBox(height: _S.of(context).s(2)),
+                    if (user.cnic != null && user.cnic!.isNotEmpty)
+                      Text(user.cnic!, style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.4)))
+                    else if (user.adminNotes == 'AI_IMPORTED' && user.proposalNumber != null)
+                      Text('#${user.proposalNumber}', style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.35)))
+                    else
+                      Text('CNIC not set', style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.2))),
+
+                  ],
+                ),
+              ),
+              Builder(builder: (ctx) => GestureDetector(
+                onTap: () => Navigator.push(ctx, MaterialPageRoute(
+                  builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: true))),
+                child: Container(
+                  width: _S.of(context).d(28), height: _S.of(context).d(28),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(_S.of(context).s(8)),
+                  ),
+                  child: Icon(Icons.remove_red_eye_outlined,
+                      size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
+                ),
+              )),
+            ],
+          ),
+          SizedBox(height: _S.of(context).s(12)),
+          _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
+          _DetailRow(icon: Icons.calendar_today_rounded, label: 'Submitted ${_timeAgo(user.postedAt)}'),
+          SizedBox(height: _S.of(context).s(12)),
+          Row(
+            children: [
+              Expanded(child: _ActBtn(
+                label: 'Approve', icon: Icons.check_rounded, color: kGreen,
+                onTap: () {
+                  HapticFeedback.mediumImpact();
+                  // AI imported proposals: skip payment dialog, approve with 0 amount
+                  if (user.adminNotes == 'AI_IMPORTED') {
+                    svc.approveAiProposal(user.id);
+                    return;
+                  }
+                  showDialog(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      backgroundColor: const Color(0xFF16132A),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_S.of(context).s(20))),
+                      title: const Text('Confirm Approval', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                      content: Text(
+                        'I hereby confirm that all details have been checked and the payment has been received.',
+                        style: TextStyle(color: Colors.white70, fontSize: _S.of(context).f(13.5), height: 1.55),
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5)))),
+                        GestureDetector(
+                          onTap: () { Navigator.pop(context); svc.approveProposal(user.id); },
+                          child: Container(
+                            padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(16), vertical: _S.of(context).s(10)),
+                            decoration: BoxDecoration(color: kGreen, borderRadius: BorderRadius.circular(_S.of(context).s(10))),
+                            child: const Text('Confirm', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              )),
+              SizedBox(width: _S.of(context).s(8)),
+              Expanded(child: _ActBtn(
+                label: 'Edit', icon: Icons.edit_rounded, color: kPurple, onTap: onEdit,
+              )),
+              SizedBox(width: _S.of(context).s(8)),
+              Expanded(child: _ActBtn(
+                label: 'Reject', icon: Icons.close_rounded, color: kRose,
+                onTap: () { HapticFeedback.heavyImpact(); svc.deleteUser(user.id, from: 'orders'); },
+              )),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Featured Token Card ────────────────────────────────────────────────────────
+class _MiniAvatar extends StatelessWidget {
+  final AdminUser user;
+  const _MiniAvatar({required this.user});
+
+  void _showFullScreen(BuildContext context) {
+    final photoUrl = user.profilePhoto;
+    if (photoUrl == null || photoUrl.isEmpty) return;
+    showDialog(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (_) => GestureDetector(
+        onTap: () => Navigator.pop(_),
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Center(
+            child: InteractiveViewer(
+              child: CachedNetworkImage(imageUrl: photoUrl, fit: BoxFit.contain),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final photoUrl = user.profilePhoto;
+    final initial = user.name.isNotEmpty ? user.name.substring(0, 1) : '?';
+    final s = _S.of(context);
+    final fallback = Center(child: Text(initial, style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w800, color: Colors.white)));
+    return GestureDetector(
+      onTap: () => _showFullScreen(context),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(s.s(11)),
+        child: Container(
+          width: s.d(40), height: s.d(40),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: user.gender == 'Female'
+                  ? [kRose.withOpacity(0.7), kRose]
+                  : [kPurple.withOpacity(0.7), kPurpleDeep],
+            ),
+            borderRadius: BorderRadius.circular(s.s(11)),
+          ),
+          child: photoUrl != null && photoUrl.isNotEmpty
+              ? CachedNetworkImage(imageUrl: photoUrl, fit: BoxFit.cover, errorWidget: (_, __, ___) => fallback)
+              : fallback,
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final int maxLines;
+  const _DetailRow({required this.icon, required this.label, this.maxLines = 1});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: _S.of(context).s(5)),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: _S.of(context).d(14), color: Colors.white.withOpacity(0.3)),
+          SizedBox(width: _S.of(context).s(6)),
+          Expanded(
+            child: Text(label,
+                style: TextStyle(fontSize: _S.of(context).f(12.5), color: Colors.white.withOpacity(0.55)),
+                maxLines: maxLines, overflow: TextOverflow.ellipsis),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActBtn extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  const _ActBtn({required this.label, required this.icon, required this.color, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: _S.of(context).d(36),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(_S.of(context).s(10)),
+          border: Border.all(color: color.withOpacity(0.2)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: _S.of(context).d(14)),
+            SizedBox(width: _S.of(context).s(4)),
+            Text(label, style: TextStyle(fontSize: _S.of(context).f(12), fontWeight: FontWeight.w700, color: color)),
+          ],
+        ),
+      ),
+    );
+  }
+}

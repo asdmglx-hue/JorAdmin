@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "228767944784",
+    "project_id": "jor-rishta-app",
+    "storage_bucket": "jor-rishta-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:228767944784:android:b82e3f310db69aecd88155",
+        "android_client_info": {
+          "package_name": "com.example.easyrishta"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDqSxn2aXghmRhPTs7eDaZXW5KlHjpLyaU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:228767944784:android:2dccbcebcb85ff96d88155",
+        "android_client_info": {
+          "package_name": "com.example.jor_admin"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDqSxn2aXghmRhPTs7eDaZXW5KlHjpLyaU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
