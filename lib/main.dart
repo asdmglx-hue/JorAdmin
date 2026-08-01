@@ -4,7 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'utils/theme.dart';
-import 'services/notification_service.dart';
 import 'services/fcm_service.dart';
 import 'screens/admin_login_screen.dart';
 
@@ -41,9 +40,9 @@ void main() async {
     debugPrint('Supabase init error: $e');
   }
 
-  // Kept for parity with the user app in case admin actions trigger
-  // notifications/FCM-related code paths (e.g. push to users on approve).
-  await NotificationService.instance.init();
+  // FCM device registration only (permission + token sync). Push-sending
+  // logic and the in-app notification system have been removed and are
+  // pending a fresh implementation.
   await FCMService.instance.init();
 
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(

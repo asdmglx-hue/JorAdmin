@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../services/supabase_service.dart';
+import '../utils/realtime_refresh.dart';
 import '../models/admin_models.dart';
 import 'admin_edit_user_screen.dart';
 
@@ -31,12 +32,16 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
   final _db = SupabaseService.instance;
   String _search = '';
   final _searchCtrl = TextEditingController();
+  bool _refreshing = false;
 
   String get _title => widget.source == 'orders' ? 'Rejected Proposals' : widget.source == 'affiliates' ? 'Deleted Affiliates' : 'Deleted Users';
+
+  AutoRefreshSync? _sync;
 
   @override
   void dispose() {
     _searchCtrl.dispose();
+    _sync?.unsubscribe();
     super.dispose();
   }
 
@@ -47,7 +52,30 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.source == 'affiliates') _loadDeletedAffiliates();
+    if (widget.source == 'affiliates') {
+      _loadDeletedAffiliates();
+      // The users/orders view above already auto-refreshes via the
+      // ListenableBuilder(listenable: widget.svc) wrapping build() below.
+      // The affiliates view reads from local state populated by a direct
+      // Supabase query instead, so it needs its own realtime subscription.
+      _sync = subscribeAutoRefresh(
+        client: _db.client,
+        channelName: 'admin-sync-affiliate-trash',
+        tables: const ['affiliates'],
+        onChange: () { if (mounted) _loadDeletedAffiliates(); },
+      );
+    }
+  }
+
+  Future<void> _doRefresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    if (widget.source == 'affiliates') {
+      await _loadDeletedAffiliates();
+    } else {
+      await widget.svc.loadData();
+    }
+    if (mounted) setState(() => _refreshing = false);
   }
 
   Future<void> _loadDeletedAffiliates() async {
@@ -73,11 +101,68 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
     } catch (_) {}
   }
 
+  void _confirmDeleteAffiliate(BuildContext context, Map<String, dynamic> a) {
+    final s = _S.of(context);
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF16132A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(18))),
+        title: Text('Delete Permanently?',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: s.f(15))),
+        content: Text('This will permanently remove ${a['name'] ?? 'this affiliate'}. Cannot be undone.',
+            style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: s.f(13))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: s.f(13))),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              HapticFeedback.heavyImpact();
+              _permanentDeleteAffiliate(a['id']);
+            },
+            child: Text('Delete Forever', style: TextStyle(color: kRose, fontWeight: FontWeight.w700, fontSize: s.f(13))),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _deleteAllAffiliates() async {
     try {
       await _db.client.from('affiliates').delete().eq('deleted', true);
       _loadDeletedAffiliates();
     } catch (_) {}
+  }
+
+  // Deletes every given user one at a time, awaiting each so a failure on
+  // one row (e.g. a DB constraint) can't be silently lost — the previous
+  // version fired all deletes at once without awaiting or catching errors,
+  // so any single failure just left that card behind with no indication
+  // why. Continues past failures instead of stopping the whole batch, then
+  // reports how many actually succeeded.
+  Future<void> _deleteAllUsers(BuildContext context, List<AdminUser> users) async {
+    final failed = <String>[];
+    for (final u in users) {
+      try {
+        await widget.svc.permanentlyDeleteUser(u.id);
+      } catch (e) {
+        failed.add(u.name);
+        debugPrint('[AdminTrashScreen] failed to delete ${u.name} (${u.id}): $e');
+      }
+    }
+    if (!context.mounted) return;
+    final succeeded = users.length - failed.length;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(failed.isEmpty
+          ? '$succeeded item${succeeded != 1 ? 's' : ''} deleted'
+          : '$succeeded deleted, ${failed.length} failed (${failed.join(', ')})'),
+      backgroundColor: failed.isEmpty ? kGreen : kRose,
+      behavior: SnackBarBehavior.floating,
+      duration: Duration(seconds: failed.isEmpty ? 2 : 5),
+    ));
   }
 
   void _confirmDeleteAll(BuildContext context, VoidCallback onConfirm, int count) {
@@ -137,23 +222,36 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
                     style: TextStyle(fontSize: s.f(12), color: Colors.white.withOpacity(0.4))),
               ],
             ),
-            actions: allDeleted.isNotEmpty ? [
+            actions: [
               GestureDetector(
-                onTap: () => _confirmDeleteAll(context, () {
-                  for (final u in allDeleted) widget.svc.permanentlyDeleteUser(u.id);
-                }, allDeleted.length),
+                onTap: _doRefresh,
                 child: Container(
-                  margin: EdgeInsets.only(right: s.s(16)),
-                  padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(6)),
+                  margin: EdgeInsets.only(right: allDeleted.isNotEmpty ? s.s(8) : s.s(16)),
+                  padding: EdgeInsets.all(s.s(6)),
                   decoration: BoxDecoration(
-                    color: kRose.withOpacity(0.12),
+                    color: Colors.white.withOpacity(0.06),
                     borderRadius: BorderRadius.circular(s.s(8)),
-                    border: Border.all(color: kRose.withOpacity(0.3)),
                   ),
-                  child: Text('Delete All', style: TextStyle(color: kRose, fontSize: s.f(12), fontWeight: FontWeight.w700)),
+                  child: _refreshing
+                      ? SizedBox(width: s.d(16), height: s.d(16), child: const CircularProgressIndicator(color: Colors.white54, strokeWidth: 2))
+                      : Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18)),
                 ),
               ),
-            ] : null,
+              if (allDeleted.isNotEmpty)
+                GestureDetector(
+                  onTap: () => _confirmDeleteAll(context, () => _deleteAllUsers(context, allDeleted), allDeleted.length),
+                  child: Container(
+                    margin: EdgeInsets.only(right: s.s(16)),
+                    padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(6)),
+                    decoration: BoxDecoration(
+                      color: kRose.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(s.s(8)),
+                      border: Border.all(color: kRose.withOpacity(0.3)),
+                    ),
+                    child: Text('Delete All', style: TextStyle(color: kRose, fontSize: s.f(12), fontWeight: FontWeight.w700)),
+                  ),
+                ),
+            ],
             bottom: PreferredSize(
               preferredSize: const Size.fromHeight(1),
               child: Container(height: 1, color: Colors.white.withOpacity(0.07)),
@@ -235,21 +333,36 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
                 style: TextStyle(fontSize: s.f(12), color: Colors.white.withOpacity(0.4))),
           ],
         ),
-        actions: _deletedAffiliates.isNotEmpty ? [
+        actions: [
           GestureDetector(
-            onTap: () => _confirmDeleteAll(context, _deleteAllAffiliates, _deletedAffiliates.length),
+            onTap: _doRefresh,
             child: Container(
-              margin: EdgeInsets.only(right: s.s(16)),
-              padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(6)),
+              margin: EdgeInsets.only(right: _deletedAffiliates.isNotEmpty ? s.s(8) : s.s(16)),
+              padding: EdgeInsets.all(s.s(6)),
               decoration: BoxDecoration(
-                color: kRose.withOpacity(0.12),
+                color: Colors.white.withOpacity(0.06),
                 borderRadius: BorderRadius.circular(s.s(8)),
-                border: Border.all(color: kRose.withOpacity(0.3)),
               ),
-              child: Text('Delete All', style: TextStyle(color: kRose, fontSize: s.f(12), fontWeight: FontWeight.w700)),
+              child: _refreshing
+                  ? SizedBox(width: s.d(16), height: s.d(16), child: const CircularProgressIndicator(color: Colors.white54, strokeWidth: 2))
+                  : Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18)),
             ),
           ),
-        ] : null,
+          if (_deletedAffiliates.isNotEmpty)
+            GestureDetector(
+              onTap: () => _confirmDeleteAll(context, _deleteAllAffiliates, _deletedAffiliates.length),
+              child: Container(
+                margin: EdgeInsets.only(right: s.s(16)),
+                padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(6)),
+                decoration: BoxDecoration(
+                  color: kRose.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(s.s(8)),
+                  border: Border.all(color: kRose.withOpacity(0.3)),
+                ),
+                child: Text('Delete All', style: TextStyle(color: kRose, fontSize: s.f(12), fontWeight: FontWeight.w700)),
+              ),
+            ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(height: 1, color: Colors.white.withOpacity(0.07)),
@@ -306,42 +419,77 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
                         itemCount: items.length,
                         itemBuilder: (_, i) {
                           final a = items[i];
+                          final name = (a['name'] ?? '').toString();
                           return Container(
-                            margin: EdgeInsets.only(bottom: s.s(12)),
-                            padding: EdgeInsets.all(s.s(14)),
+                            margin: EdgeInsets.only(bottom: s.s(10)),
+                            padding: EdgeInsets.fromLTRB(s.s(14), s.s(12), s.s(14), s.s(12)),
                             decoration: BoxDecoration(
                               color: const Color(0xFF16132A),
-                              borderRadius: BorderRadius.circular(s.s(12)),
-                              border: Border.all(color: kPurple.withOpacity(0.25)),
+                              borderRadius: BorderRadius.circular(s.s(16)),
+                              border: Border.all(color: Colors.white.withOpacity(0.06)),
                             ),
-                            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                Text(a['name'] ?? '', style: TextStyle(color: Colors.white, fontSize: s.f(14), fontWeight: FontWeight.w700)),
-                                SizedBox(height: s.s(4)),
-                                Text(a['phone'] ?? '', style: TextStyle(color: Colors.white54, fontSize: s.f(12))),
-                                Text('Code: ${a["code"] ?? ""}', style: TextStyle(color: Colors.white38, fontSize: s.f(11))),
-                              ])),
-                              Row(mainAxisSize: MainAxisSize.min, children: [
-                                TextButton(
-                                  style: TextButton.styleFrom(
-                                    minimumSize: Size.zero,
-                                    padding: EdgeInsets.symmetric(horizontal: s.s(10), vertical: s.s(4)),
-                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              // ── Identity row: avatar, name/code, delete icon ──
+                              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Container(
+                                  width: s.d(42), height: s.d(42),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.06),
+                                    borderRadius: BorderRadius.circular(s.s(12)),
                                   ),
-                                  onPressed: () => _restoreAffiliate(a['id']),
-                                  child: Text('Restore', style: TextStyle(color: kGreen, fontSize: s.f(12), fontWeight: FontWeight.w700)),
+                                  child: Center(
+                                    child: Text(name.isNotEmpty ? name.substring(0, 1) : '?',
+                                        style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w800,
+                                            color: Colors.white.withOpacity(0.3))),
+                                  ),
                                 ),
-                                SizedBox(width: s.s(4)),
-                                TextButton(
-                                  style: TextButton.styleFrom(
-                                    minimumSize: Size.zero,
-                                    padding: EdgeInsets.symmetric(horizontal: s.s(10), vertical: s.s(4)),
-                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                SizedBox(width: s.s(12)),
+                                Expanded(
+                                  child: Padding(
+                                    padding: EdgeInsets.only(top: s.s(2)),
+                                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                      Text(name, style: TextStyle(fontSize: s.f(14.5), fontWeight: FontWeight.w700, color: Colors.white.withOpacity(0.75)),
+                                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                                      SizedBox(height: s.s(4)),
+                                      Text((a['code'] ?? '').toString(), style: TextStyle(fontSize: s.f(12), color: Colors.white.withOpacity(0.35)),
+                                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                                    ]),
                                   ),
-                                  onPressed: () => _permanentDeleteAffiliate(a['id']),
-                                  child: Text('Delete', style: TextStyle(color: kRose, fontSize: s.f(12), fontWeight: FontWeight.w700)),
+                                ),
+                                SizedBox(width: s.s(8)),
+                                GestureDetector(
+                                  onTap: () => _confirmDeleteAffiliate(context, a),
+                                  child: Container(
+                                    padding: EdgeInsets.all(s.s(7)),
+                                    decoration: BoxDecoration(color: kRose.withOpacity(0.08), borderRadius: BorderRadius.circular(s.s(8))),
+                                    child: Icon(Icons.delete_forever_rounded, size: s.d(16), color: kRose.withOpacity(0.7)),
+                                  ),
                                 ),
                               ]),
+
+                              SizedBox(height: s.s(12)),
+                              Divider(height: 1, color: Colors.white.withOpacity(0.06)),
+                              SizedBox(height: s.s(10)),
+
+                              // ── Action row: full-width Restore ──
+                              GestureDetector(
+                                onTap: () => _restoreAffiliate(a['id']),
+                                child: Container(
+                                  width: double.infinity,
+                                  alignment: Alignment.center,
+                                  padding: EdgeInsets.symmetric(vertical: s.s(9)),
+                                  decoration: BoxDecoration(
+                                    color: kTeal.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(s.s(10)),
+                                    border: Border.all(color: kTeal.withOpacity(0.2)),
+                                  ),
+                                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                    Icon(Icons.restore_rounded, size: s.d(14), color: kTeal),
+                                    SizedBox(width: s.s(6)),
+                                    Text('Restore', style: TextStyle(fontSize: s.f(12.5), fontWeight: FontWeight.w700, color: kTeal)),
+                                  ]),
+                                ),
+                              ),
                             ]),
                           );
                         },
@@ -361,6 +509,7 @@ class _TrashCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = _S.of(context);
+    final hasReason = user.deletionReason != null && user.deletionReason!.isNotEmpty;
     return Container(
       margin: EdgeInsets.only(bottom: s.s(10)),
       padding: EdgeInsets.fromLTRB(s.s(14), s.s(12), s.s(14), s.s(12)),
@@ -369,117 +518,135 @@ class _TrashCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(s.s(16)),
         border: Border.all(color: Colors.white.withOpacity(0.06)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: s.d(42), height: s.d(42),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(s.s(12)),
-            ),
-            child: Center(
-              child: Text(user.name.isNotEmpty ? user.name.substring(0, 1) : '?',
-                  style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w800,
-                      color: Colors.white.withOpacity(0.3))),
-            ),
-          ),
-          SizedBox(width: s.s(12)),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(user.name,
-                          style: TextStyle(fontSize: s.f(14), fontWeight: FontWeight.w700,
-                              color: Colors.white.withOpacity(0.6))),
-                    ),
-                  ],
+          // ── Identity row: avatar, name/CNIC, quick view + delete icons ──
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: s.d(42), height: s.d(42),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(s.s(12)),
                 ),
-                SizedBox(height: s.s(2)),
-                Text(
-                  (user.cnic != null && user.cnic!.isNotEmpty)
-                      ? user.cnic!
-                      : user.contactPhone,
-                  style: TextStyle(fontSize: s.f(11.5), color: Colors.white.withOpacity(0.3)),
+                child: Center(
+                  child: Text(user.name.isNotEmpty ? user.name.substring(0, 1) : '?',
+                      style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w800,
+                          color: Colors.white.withOpacity(0.3))),
                 ),
-              ],
-            ),
-          ),
-          if (user.deletionReason != null && user.deletionReason!.isNotEmpty) ...[
-            GestureDetector(
-              onTap: () {
-                showDialog(
-                  context: context,
-                  builder: (_) => AlertDialog(
-                    backgroundColor: const Color(0xFF16132A),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(16))),
-                    title: Text('Deletion Reason', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: s.f(15))),
-                    content: Text(user.deletionReason!, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: s.f(13))),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: Text('Close', style: TextStyle(color: kPurple, fontWeight: FontWeight.w700, fontSize: s.f(13))),
+              ),
+              SizedBox(width: s.s(12)),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(top: s.s(2)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(user.name,
+                          style: TextStyle(fontSize: s.f(14.5), fontWeight: FontWeight.w700,
+                              color: Colors.white.withOpacity(0.75)),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      SizedBox(height: s.s(4)),
+                      Text(
+                        (user.cnic != null && user.cnic!.isNotEmpty)
+                            ? user.cnic!
+                            : user.contactPhone,
+                        style: TextStyle(fontSize: s.f(12), color: Colors.white.withOpacity(0.35)),
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
-                );
-              },
-              child: Container(
-                padding: EdgeInsets.symmetric(horizontal: s.s(10), vertical: s.s(6)),
-                decoration: BoxDecoration(
-                  color: kPurple.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(s.s(8)),
-                  border: Border.all(color: kPurple.withOpacity(0.2)),
                 ),
-                child: Text('Reason', style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700, color: kPurple)),
               ),
-            ),
-            SizedBox(width: s.s(8)),
-          ],
-          GestureDetector(
-            onTap: () {
-              HapticFeedback.mediumImpact();
-              svc.restoreUser(user.id, user.deletedFrom);
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text('${user.name} restored'),
-                backgroundColor: kGreen,
-                behavior: SnackBarBehavior.floating,
-                margin: EdgeInsets.fromLTRB(s.s(16), 0, s.s(16), s.s(72)),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(12))),
-                duration: const Duration(milliseconds: 1500),
-              ));
-            },
-            child: Container(
-              padding: EdgeInsets.symmetric(horizontal: s.s(10), vertical: s.s(6)),
-              decoration: BoxDecoration(
-                color: kTeal.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(s.s(8)),
-                border: Border.all(color: kTeal.withOpacity(0.2)),
+              SizedBox(width: s.s(8)),
+              GestureDetector(
+                onTap: () => Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: true))),
+                child: Container(
+                  padding: EdgeInsets.all(s.s(7)),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(8))),
+                  child: Icon(Icons.remove_red_eye_outlined, size: s.d(16), color: Colors.white.withOpacity(0.5)),
+                ),
               ),
-              child: Text('Restore',
-                  style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700, color: kTeal)),
-            ),
+              SizedBox(width: s.s(8)),
+              GestureDetector(
+                onTap: () => _confirmPermanentDelete(context),
+                child: Container(
+                  padding: EdgeInsets.all(s.s(7)),
+                  decoration: BoxDecoration(color: kRose.withOpacity(0.08), borderRadius: BorderRadius.circular(s.s(8))),
+                  child: Icon(Icons.delete_forever_rounded, size: s.d(16), color: kRose.withOpacity(0.7)),
+                ),
+              ),
+            ],
           ),
-          SizedBox(width: s.s(8)),
-          GestureDetector(
-            onTap: () => Navigator.push(context, MaterialPageRoute(
-              builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: true))),
-            child: Container(
-              padding: EdgeInsets.all(s.s(7)),
-              decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(8))),
-              child: Icon(Icons.remove_red_eye_outlined, size: s.d(16), color: Colors.white.withOpacity(0.5)),
-            ),
-          ),
-          SizedBox(width: s.s(8)),
-          GestureDetector(
-            onTap: () => _confirmPermanentDelete(context),
-            child: Container(
-              padding: EdgeInsets.all(s.s(7)),
-              decoration: BoxDecoration(color: kRose.withOpacity(0.08), borderRadius: BorderRadius.circular(s.s(8))),
-              child: Icon(Icons.delete_forever_rounded, size: s.d(16), color: kRose.withOpacity(0.7)),
-            ),
+
+          SizedBox(height: s.s(12)),
+          Divider(height: 1, color: Colors.white.withOpacity(0.06)),
+          SizedBox(height: s.s(10)),
+
+          // ── Action row: Reason (if any) + Restore, given room to breathe ──
+          Row(
+            children: [
+              if (hasReason) ...[
+                GestureDetector(
+                  onTap: () {
+                    showDialog(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        backgroundColor: const Color(0xFF16132A),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(16))),
+                        title: Text('Deletion Reason', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: s.f(15))),
+                        content: Text(user.deletionReason!, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: s.f(13))),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: Text('Close', style: TextStyle(color: kPurple, fontWeight: FontWeight.w700, fontSize: s.f(13))),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(9)),
+                    decoration: BoxDecoration(
+                      color: kPurple.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(s.s(10)),
+                      border: Border.all(color: kPurple.withOpacity(0.2)),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.info_outline_rounded, size: s.d(14), color: kPurple),
+                      SizedBox(width: s.s(6)),
+                      Text('Reason', style: TextStyle(fontSize: s.f(12.5), fontWeight: FontWeight.w700, color: kPurple)),
+                    ]),
+                  ),
+                ),
+                SizedBox(width: s.s(10)),
+              ],
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    HapticFeedback.mediumImpact();
+                    svc.restoreUser(user.id, user.deletedFrom);
+                  },
+                  child: Container(
+                    alignment: Alignment.center,
+                    padding: EdgeInsets.symmetric(vertical: s.s(9)),
+                    decoration: BoxDecoration(
+                      color: kTeal.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(s.s(10)),
+                      border: Border.all(color: kTeal.withOpacity(0.2)),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.restore_rounded, size: s.d(14), color: kTeal),
+                      SizedBox(width: s.s(6)),
+                      Text('Restore', style: TextStyle(fontSize: s.f(12.5), fontWeight: FontWeight.w700, color: kTeal)),
+                    ]),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

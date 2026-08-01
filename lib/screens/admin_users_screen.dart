@@ -1,17 +1,29 @@
 import '../services/supabase_service.dart';
-import '../services/fcm_service.dart';
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
-import '../services/notification_service.dart';
 import '../models/admin_models.dart';
 import 'admin_edit_user_screen.dart';
 import 'admin_trash_screen.dart';
 import 'admin_edit_requests_screen.dart';
+
+// Shared by both the "Featured" filter chip (_AdminUsersScreenState) and
+// the "Featured" badge label on each card (_UserCard) — was previously
+// duplicated as a private method on _UserCard only, which meant the filter
+// chip couldn't see it and had to fall back to checking the wrong field.
+bool hasFeaturedBoostToday(AdminUser u) {
+  final now = DateTime.now();
+  return u.featuredSchedule.any((b) =>
+    !b.isUsed &&
+    now.isAfter(b.scheduledDate) &&
+    now.isBefore(b.scheduledDate.add(const Duration(hours: 24)))
+  );
+}
 
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
@@ -104,10 +116,6 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
             ));
             if (confirm == true) {
               await widget.svc.deleteUserByNumber(num);
-              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text('Proposal #$num deleted'),
-                backgroundColor: kGreen, behavior: SnackBarBehavior.floating,
-              ));
             }
           },
           child: Text('Find & Delete', style: TextStyle(color: kRose, fontWeight: FontWeight.w700, fontSize: s.f(13))),
@@ -118,12 +126,26 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 
   List<AdminUser> get _filtered {
     var list = widget.svc.users.where((u) => u.status != ProposalStatus.deleted && u.status != ProposalStatus.pending).toList();
-    if (_filter == 'Inactive') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.inactive).toList();
+    // 'Inactive' matches the same definition used for the badge label
+    // elsewhere on this screen (see _getBadgeLabel): expired counts as
+    // inactive too. Checking only SubscriptionStatus.inactive matched
+    // almost nothing, since real expired subscriptions parse to
+    // SubscriptionStatus.expired — .inactive is only ever the fallback
+    // for missing/unparseable data, not what real expired users have.
+    if (_filter == 'Inactive') list = list.where((u) =>
+        u.subscriptionStatus == SubscriptionStatus.expired ||
+        u.subscriptionStatus == SubscriptionStatus.inactive).toList();
     if (_filter == 'Active') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.active).toList();
     if (_filter == 'Expired') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.expired).toList();
     if (_filter == 'Paused') list = list.where((u) => u.status == ProposalStatus.paused).toList();
-    if (_filter == 'Featured') list = list.where((u) => u.subscriptionTier == SubscriptionTier.featured).toList();
+    // 'Featured' means "currently has a live featured boost" (the actual
+    // feature admins use from the Users screen), not subscriptionTier ==
+    // featured — that's a separate, unused permanent-tier field nothing in
+    // the app ever actually sets. Matches the same check the "Featured"
+    // badge label on each card uses (hasFeaturedBoostToday).
+    if (_filter == 'Featured') list = list.where((u) => hasFeaturedBoostToday(u)).toList();
     if (_filter == 'AI') list = list.where((u) => u.adminNotes == 'AI_IMPORTED').toList();
+    if (_filter == 'Refunded') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.refunded).toList();
     final now = DateTime.now();
     if (_dateFrom != null && _dateTo != null) {
       list = list.where((u) => !u.postedAt.isBefore(_dateFrom!) && !u.postedAt.isAfter(_dateTo!.add(const Duration(days: 1)))).toList();
@@ -348,9 +370,6 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
               child: Icon(Icons.calendar_today_rounded, size: s.d(18), color: timeActive ? kPurple : Colors.white.withOpacity(0.4)),
             ),
           ),
-          SizedBox(width: s.s(8)),
-          // ── Edit Requests Review icon ──────────────────────────────────
-          _EditRequestsBadge(s: s),
         ],
       ),
     );
@@ -358,7 +377,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 
   Widget _buildFilterRow() {
     final s = _S.of(context);
-    final filters = ['All', 'AI', 'Active', 'Paused', 'Featured'];
+    final filters = ['All', 'AI', 'Active', 'Inactive', 'Refunded', 'Paused', 'Featured'];
     return SizedBox(
       height: s.d(44),
       child: ListView.builder(
@@ -401,7 +420,9 @@ class _UserCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = _S.of(context);
-    return Container(
+    return GestureDetector(
+      onLongPress: user.adminNotes == 'AI_IMPORTED' ? () => _showAiApprovalMenu(context) : null,
+      child: Container(
       margin: EdgeInsets.only(bottom: s.s(10)),
       decoration: BoxDecoration(
         color: const Color(0xFF16132A),
@@ -440,6 +461,12 @@ class _UserCard extends StatelessWidget {
                             ),
                           ],
                           if (user.adminNotes == 'AI_IMPORTED') ...[
+                            SizedBox(width: s.s(4)),
+                            Container(
+                              padding: EdgeInsets.symmetric(horizontal: s.s(7), vertical: s.s(2)),
+                              decoration: BoxDecoration(color: kRose.withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(7))),
+                              child: Text('Not Approved', style: TextStyle(fontSize: s.f(10), fontWeight: FontWeight.w700, color: kRose)),
+                            ),
                             SizedBox(width: s.s(4)),
                             Container(
                               padding: EdgeInsets.symmetric(horizontal: s.s(6), vertical: s.s(2)),
@@ -510,6 +537,7 @@ class _UserCard extends StatelessWidget {
                           ? user.subscriptionDaysLeft
                           : '—',
                   color: kPurple,
+                  onTap: null, // Superseded by the full "Approve Profile" dialog (long-press → Approve Profile), which sets expiry together with CNIC/password instead of on its own.
                 ),
                 _divider(context),
                 _InfoChip(
@@ -566,19 +594,9 @@ class _UserCard extends StatelessWidget {
                         ),
                       );
                       if (confirmed != true) return;
-                      final result = await SupabaseService.instance.renewSubscription(user.id);
-                      final expiry = result['expiry'] as DateTime;
-                      final expiryStr = '${expiry.day}/${expiry.month}/${expiry.year}';
+                      await SupabaseService.instance.renewSubscription(user.id);
                       svc.restoreUser(user.id, 'users');
                       // Renewal notification sent automatically by edge function
-                      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text('${user.name} renewed until $expiryStr'),
-                        backgroundColor: kGreen,
-                        behavior: SnackBarBehavior.floating,
-                        margin: const EdgeInsets.fromLTRB(16, 0, 16, 72),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        duration: const Duration(milliseconds: 1800),
-                      ));
                     },
                   )
                 else if (user.status != ProposalStatus.paused)
@@ -660,6 +678,7 @@ class _UserCard extends StatelessWidget {
           ),
         ],
       ),
+      ),
     );
   }
 
@@ -708,43 +727,370 @@ class _UserCard extends StatelessWidget {
     return Container(width: 1, height: s.d(28), color: Colors.white.withOpacity(0.1), margin: EdgeInsets.symmetric(horizontal: s.s(8)));
   }
 
-  bool _hasFeaturedBoostToday(AdminUser u) {
-    final now = DateTime.now();
-    return u.featuredSchedule.any((b) =>
-      !b.isUsed &&
-      now.isAfter(b.scheduledDate) &&
-      now.isBefore(b.scheduledDate.add(const Duration(hours: 24)))
-    );
-  }
-
   Color _badgeColor(AdminUser u) {
+    if (u.subscriptionStatus == SubscriptionStatus.refunded) return kRose;
     if (u.status == ProposalStatus.paused) return kTeal;
     if (u.subscriptionStatus == SubscriptionStatus.expired || u.subscriptionStatus == SubscriptionStatus.inactive) return const Color(0xFF6B7280);
-    if (_hasFeaturedBoostToday(u)) return kAmber;
+    if (hasFeaturedBoostToday(u)) return kAmber;
     if (u.subscriptionTier == SubscriptionTier.featured &&
         u.subscriptionStatus == SubscriptionStatus.active) return kAmber;
     switch (u.subscriptionStatus) {
       case SubscriptionStatus.active: return kGreen;
       case SubscriptionStatus.expired: return const Color(0xFF6B7280);
       case SubscriptionStatus.inactive: return Colors.white38;
+      case SubscriptionStatus.refunded: return kRose;
     }
   }
 
   String _badgeLabel(AdminUser u) {
+    if (u.subscriptionStatus == SubscriptionStatus.refunded) return 'Refunded';
     if (u.status == ProposalStatus.paused) return 'Paused';
     if (u.status == ProposalStatus.approved) return 'Active';
     if (u.subscriptionStatus == SubscriptionStatus.expired || u.subscriptionStatus == SubscriptionStatus.inactive) return 'Inactive';
-    if (_hasFeaturedBoostToday(u)) return 'Featured';
+    if (hasFeaturedBoostToday(u)) return 'Featured';
     if (u.subscriptionTier == SubscriptionTier.featured &&
         u.subscriptionStatus == SubscriptionStatus.active) return 'Featured';
     switch (u.subscriptionStatus) {
       case SubscriptionStatus.active: return 'Active';
       case SubscriptionStatus.expired: return 'Inactive';
       case SubscriptionStatus.inactive: return '';
+      case SubscriptionStatus.refunded: return 'Refunded';
     }
   }
 
   String _date(DateTime d) => '${d.day}/${d.month}/${d.year % 100}';
+
+  void _showSetDaysDialog(BuildContext context) {
+    final daysCtrl = TextEditingController();
+    bool saving = false;
+    String? error;
+
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (dlgCtx, setDlg) => AlertDialog(
+          backgroundColor: const Color(0xFF16132A),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(children: [
+            Icon(Icons.event_available_rounded, color: kPurple, size: 20),
+            const SizedBox(width: 8),
+            const Text('Set Days Left', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+          ]),
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              'Expiry for AI-added proposals must be added manually.',
+              style: TextStyle(fontSize: 12.5, color: Colors.white.withOpacity(0.5)),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: daysCtrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              onChanged: (_) => setDlg(() {}),
+              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+              decoration: InputDecoration(
+                hintText: 'e.g. 90',
+                hintStyle: TextStyle(color: Colors.white.withOpacity(0.2)),
+                suffixText: 'days',
+                suffixStyle: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 13),
+                filled: true,
+                fillColor: Colors.black.withOpacity(0.25),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+                focusedBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8)), borderSide: BorderSide(color: kPurple)),
+              ),
+            ),
+            if (error != null) ...[
+              const SizedBox(height: 8),
+              Text(error!, style: const TextStyle(fontSize: 12, color: kRose)),
+            ],
+          ]),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dlgCtx),
+              child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.4))),
+            ),
+            Builder(builder: (context) {
+              final days = int.tryParse(daysCtrl.text.trim());
+              final enabled = days != null && days > 0 && !saving;
+              return GestureDetector(
+                onTap: !enabled ? null : () async {
+                  setDlg(() { saving = true; error = null; });
+                  try {
+                    await SupabaseService.instance.setCustomSubscriptionDays(user.id, days!);
+                    if (dlgCtx.mounted) Navigator.pop(dlgCtx);
+                  } catch (e) {
+                    setDlg(() { saving = false; error = 'Failed to save'; });
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(color: enabled ? kPurple : kPurple.withOpacity(0.35), borderRadius: BorderRadius.circular(8)),
+                  child: saving
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : Text('Save', style: TextStyle(color: Colors.white.withOpacity(enabled ? 1 : 0.6), fontWeight: FontWeight.w700, fontSize: 13)),
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Long-press entry point on AI-imported cards only — offers to approve
+  // (which opens the full form below) or explicitly leave it unapproved.
+  void _showAiApprovalMenu(BuildContext context) {
+    HapticFeedback.mediumImpact();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1A33),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetCtx) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const SizedBox(height: 8),
+        Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
+        const SizedBox(height: 16),
+        ListTile(
+          leading: const Icon(Icons.check_circle_rounded, color: kGreen),
+          title: const Text('Approve Profile', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+          subtitle: Text('Requires CNIC, password, and expiry to be set first',
+            style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 11.5)),
+          onTap: () { Navigator.pop(sheetCtx); _showApproveAiDialog(context); },
+        ),
+        const SizedBox(height: 8),
+      ])),
+    );
+  }
+
+  // The actual approval form. CNIC, password, and expiry days are all
+  // required — the Approve button stays disabled (matching the same
+  // muted-until-ready pattern used everywhere else in this app) until all
+  // three have valid values. Rs. Spent is the one optional field. On
+  // success this calls approve_ai_proposal(), which atomically sets
+  // everything AND flips admin_notes away from 'AI_IMPORTED' — that's
+  // what makes the card leave the AI filter and show under Active,
+  // exactly like an ordinary profile, with the persistent "Approved" tag
+  // now showing next to its status.
+  void _showApproveAiDialog(BuildContext context) {
+    final cnicCtrl = TextEditingController();
+    final passwordCtrl = TextEditingController();
+    final daysCtrl = TextEditingController();
+    final spentCtrl = TextEditingController();
+    bool saving = false;
+    bool generatingCnic = false;
+    String? error;
+
+    InputDecoration deco(String hint, {String? suffix}) => InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: Colors.white.withOpacity(0.2)),
+      suffixText: suffix,
+      suffixStyle: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12),
+      filled: true,
+      fillColor: Colors.black.withOpacity(0.25),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+      focusedBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8)), borderSide: BorderSide(color: kPurple)),
+    );
+
+    Widget genButton(bool loading, VoidCallback onTap) => GestureDetector(
+      onTap: loading ? null : onTap,
+      child: Container(
+        padding: const EdgeInsets.all(11),
+        decoration: BoxDecoration(color: kPurple.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+        child: loading
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: kPurple, strokeWidth: 2))
+            : Icon(Icons.auto_fix_high_rounded, color: kPurple, size: 18),
+      ),
+    );
+
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (dlgCtx, setDlg) => AlertDialog(
+          backgroundColor: const Color(0xFF16132A),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(children: [
+            Icon(Icons.check_circle_rounded, color: kGreen, size: 20),
+            const SizedBox(width: 8),
+            const Text('Approve Profile', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+          ]),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('CNIC, password, and expiry are all required before this profile can be approved.',
+                style: TextStyle(fontSize: 12.5, color: Colors.white.withOpacity(0.5))),
+              const SizedBox(height: 14),
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Expanded(child: TextField(
+                  controller: cnicCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d-]')), _AiCnicFormatter()],
+                  onChanged: (_) => setDlg(() {}),
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: deco('CNIC'),
+                )),
+                const SizedBox(width: 8),
+                genButton(generatingCnic, () async {
+                  setDlg(() => generatingCnic = true);
+                  try {
+                    final cnic = await SupabaseService.instance.generateNextAiCnic();
+                    cnicCtrl.text = cnic;
+                  } catch (_) {}
+                  setDlg(() => generatingCnic = false);
+                }),
+              ]),
+              const SizedBox(height: 10),
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Expanded(child: TextField(
+                  controller: passwordCtrl,
+                  onChanged: (_) => setDlg(() {}),
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: deco('Password'),
+                )),
+                const SizedBox(width: 8),
+                genButton(false, () {
+                  passwordCtrl.text = _generateAiPassword();
+                  setDlg(() {});
+                }),
+              ]),
+              const SizedBox(height: 10),
+              TextField(
+                controller: daysCtrl,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                onChanged: (_) => setDlg(() {}),
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                decoration: deco('Expiry', suffix: 'days'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: spentCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                decoration: deco('Rs. Spent (optional)'),
+              ),
+              if (error != null) ...[
+                const SizedBox(height: 8),
+                Text(error!, style: const TextStyle(fontSize: 12, color: kRose)),
+              ],
+            ]),
+          ),
+          actionsAlignment: MainAxisAlignment.spaceBetween,
+          actions: [
+            Builder(builder: (context) {
+              final copyEnabled = cnicCtrl.text.trim().isNotEmpty && passwordCtrl.text.trim().isNotEmpty && (int.tryParse(daysCtrl.text.trim()) ?? 0) > 0;
+              return GestureDetector(
+                onTap: !copyEnabled ? null : () {
+                  final days = int.parse(daysCtrl.text.trim());
+                  final validUntil = DateTime.now().add(Duration(days: days));
+                  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+                  final validUntilStr = '${validUntil.day} ${months[validUntil.month - 1]} ${validUntil.year}';
+                  final message = '''
+*Your Login Details*
+
+*CNIC:* ${cnicCtrl.text.trim()}
+*Password:* ${passwordCtrl.text.trim()}
+
+*View Your Profile:*
+https://joronline.com/profile/${user.proposalNumber}
+
+You can change your password and update your profile after logging in.
+
+*Website:*
+joronline.com
+
+*Android App:*
+joronline.com/get-android
+
+Your *Free Plan* is valid until: *$validUntilStr*
+
+We're available 24/7 on WhatsApp to assist you, and we wish you success in finding the right rishta on Jor!
+
+Jor Team 🤗'''.trim();
+                  Clipboard.setData(ClipboardData(text: message));
+                  HapticFeedback.lightImpact();
+                },
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.copy_rounded, size: 14, color: copyEnabled ? kPurple : Colors.white.withOpacity(0.2)),
+                  const SizedBox(width: 5),
+                  Text('Copy', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: copyEnabled ? kPurple : Colors.white.withOpacity(0.2))),
+                ]),
+              );
+            }),
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              TextButton(
+                onPressed: () => Navigator.pop(dlgCtx),
+                child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.4))),
+              ),
+              Builder(builder: (context) {
+              final cnicValid = cnicCtrl.text.replaceAll('-', '').length == 13;
+              final passwordValid = passwordCtrl.text.trim().isNotEmpty;
+              final days = int.tryParse(daysCtrl.text.trim());
+              final daysValid = days != null && days > 0;
+              final enabled = cnicValid && passwordValid && daysValid && !saving;
+              return GestureDetector(
+                onTap: !enabled ? null : () async {
+                  setDlg(() { saving = true; error = null; });
+                  try {
+                    final spent = double.tryParse(spentCtrl.text.trim());
+                    await SupabaseService.instance.approveAiProposalWithDetails(
+                      userId: user.id,
+                      cnic: cnicCtrl.text.trim(),
+                      password: passwordCtrl.text.trim(),
+                      days: days!,
+                      amountPaid: spent,
+                    );
+                    if (dlgCtx.mounted) Navigator.pop(dlgCtx);
+                  } catch (e) {
+                    setDlg(() { saving = false; error = 'Failed to approve: $e'; });
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(color: enabled ? kGreen : kGreen.withOpacity(0.3), borderRadius: BorderRadius.circular(8)),
+                  child: saving
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : Text('Approve', style: TextStyle(color: Colors.white.withOpacity(enabled ? 1 : 0.6), fontWeight: FontWeight.w700, fontSize: 13)),
+                ),
+              );
+            }),
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Random password for the auto-generate button — deliberately excludes
+  // visually-confusable characters (0/O, 1/l/I) so a typed-out password
+  // is easy to read back correctly if it ever needs to be shared.
+  String _generateAiPassword() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    final rand = Random.secure();
+    return List.generate(8, (_) => chars[rand.nextInt(chars.length)]).join();
+  }
+}
+
+// Same dash placement as elsewhere in this app (XXXXX-XXXXXXX-X). Kept as
+// its own copy here since Dart privacy means it can't be imported from
+// admin_edit_user_screen.dart / admin_add_user_screen.dart — matches the
+// established pattern already used for other small private helpers.
+class _AiCnicFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final digits = newValue.text.replaceAll('-', '');
+    if (digits.length > 13) return oldValue;
+    final buf = StringBuffer();
+    for (int i = 0; i < digits.length; i++) {
+      if (i == 5 || i == 12) buf.write('-');
+      buf.write(digits[i]);
+    }
+    final formatted = buf.toString();
+    return TextEditingValue(text: formatted, selection: TextSelection.collapsed(offset: formatted.length));
+  }
 }
 
 class _Avatar extends StatelessWidget {
@@ -774,7 +1120,7 @@ class _Avatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = _S.of(context);
-    final isFemale = user.gender == 'Female';
+    final isFemale = user.gender.trim().toLowerCase() == 'female';
     final initial = user.name.isNotEmpty ? user.name.substring(0, 1) : '?';
     final fallback = Center(child: Text(initial, style: TextStyle(fontSize: s.f(20), fontWeight: FontWeight.w800, color: Colors.white)));
     final photoUrl = user.profilePhoto;
@@ -804,19 +1150,21 @@ class _InfoChip extends StatelessWidget {
   final String label;
   final String value;
   final Color color;
-  const _InfoChip({required this.label, required this.value, required this.color});
+  final VoidCallback? onTap;
+  const _InfoChip({required this.label, required this.value, required this.color, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final s = _S.of(context);
+    final content = Column(
+      children: [
+        Text(value, style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700, color: color), textAlign: TextAlign.center),
+        SizedBox(height: s.s(2)),
+        Text(label, style: TextStyle(fontSize: s.f(9.5), color: Colors.white.withOpacity(0.35)), textAlign: TextAlign.center),
+      ],
+    );
     return Expanded(
-      child: Column(
-        children: [
-          Text(value, style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700, color: color), textAlign: TextAlign.center),
-          SizedBox(height: s.s(2)),
-          Text(label, style: TextStyle(fontSize: s.f(9.5), color: Colors.white.withOpacity(0.35)), textAlign: TextAlign.center),
-        ],
-      ),
+      child: onTap == null ? content : GestureDetector(onTap: onTap, behavior: HitTestBehavior.opaque, child: content),
     );
   }
 }
@@ -832,19 +1180,21 @@ class _ActionBtn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = _S.of(context);
-    final effectiveColor = disabled ? Colors.white24 : color;
+    final effectiveColor = disabled ? Colors.white : color;
+    final bgOpacity = disabled ? 0.03 : 0.1;
+    final iconOpacity = disabled ? 0.15 : 1.0;
     return Expanded(
       child: GestureDetector(
         onTap: disabled ? null : onTap,
         child: Container(
           height: s.d(36),
-          decoration: BoxDecoration(color: effectiveColor.withOpacity(0.1), borderRadius: BorderRadius.circular(s.s(10)), border: Border.all(color: effectiveColor.withOpacity(0.2))),
+          decoration: BoxDecoration(color: effectiveColor.withOpacity(bgOpacity), borderRadius: BorderRadius.circular(s.s(10))),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: effectiveColor, size: s.d(14)),
+              Icon(icon, color: effectiveColor.withOpacity(iconOpacity), size: s.d(14)),
               SizedBox(width: s.s(4)),
-              Text(label, style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700, color: effectiveColor)),
+              Text(label, style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700, color: effectiveColor.withOpacity(iconOpacity))),
             ],
           ),
         ),
@@ -914,21 +1264,14 @@ class _FeaturedManageSheetState extends State<_FeaturedManageSheet> {
     if (!mounted) return;
     setState(() => _scheduling = false);
     if (err == null) {
-      messenger.showSnackBar(SnackBar(
-        content: Text('Scheduled for ${_fmt(_scheduleDate)} in $city'),
-        backgroundColor: kGreen,
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 72),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        duration: const Duration(milliseconds: 1500),
-      ));
     } else {
+      final maxPerCity = int.tryParse(SupabaseService.instance.cachedSettings['max_featured_per_city'] ?? '5') ?? 5;
       final msg = err == 'no_credits'
           ? 'No credits available. Add credits first.'
           : err == 'duplicate_city'
               ? 'Already scheduled in $city. Remove it first.'
               : err == 'city_limit'
-                  ? '$city already has 3 featured posts. Wait for one to expire.'
+                  ? '$city already has $maxPerCity featured post${maxPerCity == 1 ? '' : 's'} on that date. Wait for one to expire or pick another date.'
                   : 'Failed: $err';
       messenger.showSnackBar(SnackBar(
         content: Text(msg),
@@ -1138,8 +1481,8 @@ class _FeaturedManageSheetState extends State<_FeaturedManageSheet> {
                               ],
                             ),
                           ),
-                        // City selector (searchable)
-                        _AdminCityPicker(
+                        // Location selector (Pakistan / Overseas, searchable)
+                        _AdminLocationPicker(
                           value: _scheduleCity.isNotEmpty ? _scheduleCity : null,
                           onChanged: (v) { if (v != null) setState(() => _scheduleCity = v); },
                         ),
@@ -1178,15 +1521,15 @@ class _FeaturedManageSheetState extends State<_FeaturedManageSheet> {
                         SizedBox(height: _S.of(context).s(14)),
                         // Schedule button
                         GestureDetector(
-                          onTap: _scheduling ? null : _schedulePost,
+                          onTap: (_scheduling || _available <= 0) ? null : _schedulePost,
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 150),
                             width: double.infinity,
                             height: _S.of(context).d(44),
                             decoration: BoxDecoration(
-                              gradient: LinearGradient(colors: _scheduling
-                                ? [kPurple.withOpacity(0.5), kPurpleDeep.withOpacity(0.5)]
-                                : [kPurple, kPurpleDeep]),
+                              gradient: (_scheduling || _available <= 0)
+                                ? LinearGradient(colors: [kPurple.withOpacity(0.35), kPurpleDeep.withOpacity(0.35)])
+                                : LinearGradient(colors: [kPurple, kPurpleDeep]),
                               borderRadius: BorderRadius.circular(_S.of(context).s(12)),
                             ),
                             child: Row(
@@ -1195,12 +1538,12 @@ class _FeaturedManageSheetState extends State<_FeaturedManageSheet> {
                                 if (_scheduling)
                                   SizedBox(width: _S.of(context).d(18), height: _S.of(context).d(18), child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                                 else
-                                  Icon(Icons.check_rounded, color: Colors.white, size: _S.of(context).d(18)),
+                                  Icon(Icons.check_rounded, color: Colors.white.withOpacity(_available <= 0 ? 0.5 : 1), size: _S.of(context).d(18)),
                                 SizedBox(width: _S.of(context).s(8)),
                                 Text(
                                   _scheduling ? 'Scheduling...' : 'Schedule',
                                   style: TextStyle(
-                                    color: Colors.white,
+                                    color: Colors.white.withOpacity(_available <= 0 ? 0.5 : 1),
                                     fontWeight: FontWeight.w800,
                                     fontSize: _S.of(context).f(14),
                                   ),
@@ -1374,6 +1717,296 @@ class _ConfirmCreditButtonState extends State<_ConfirmCreditButton> {
 }
 
 // ── Admin City Picker (searchable, dark themed) ────────────────────────────────
+// ── Admin Location Picker (Pakistan / Overseas) ─────────────────────────────
+// Added alongside the featured-post location choice already live in the
+// website and user app: a Pakistan/Overseas toggle, then either qualifying
+// Pakistani cities (grouped by province) or qualifying overseas countries,
+// both fetched LIVE from the same shared Supabase RPCs the website and user
+// app use (get_qualifying_cities / get_qualifying_countries) — not a
+// separately hand-maintained list, so all three surfaces can never drift
+// out of sync with each other again. This does NOT replace _AdminCityPicker
+// below (left fully intact — it's used for the user's home-city field
+// elsewhere, unrelated to Featured); this is a new, separate widget used
+// only for scheduling a Featured post.
+class _AdminLocationPicker extends StatelessWidget {
+  final String? value;
+  final ValueChanged<String?> onChanged;
+  const _AdminLocationPicker({required this.value, required this.onChanged});
+
+  void _open(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      useSafeArea: true,
+      builder: (_) => _AdminLocationSheet(
+        selected: value,
+        onSelect: (v) { onChanged(v); Navigator.pop(context); },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = _S.of(context);
+    final hasValue = value != null && value!.isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Location', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        SizedBox(height: s.s(6)),
+        GestureDetector(
+          onTap: () => _open(context),
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(13)),
+            decoration: BoxDecoration(color: Colors.black.withOpacity(0.2), borderRadius: BorderRadius.circular(s.s(12)), border: Border.all(color: Colors.white.withOpacity(0.1))),
+            child: Row(
+              children: [
+                Expanded(child: Text(hasValue ? value! : 'Select city or country',
+                  style: TextStyle(fontSize: s.f(13.5), color: hasValue ? Colors.white : Colors.white38, fontWeight: hasValue ? FontWeight.w600 : FontWeight.w400))),
+                Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white38, size: s.d(22)),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AdminLocationSheet extends StatefulWidget {
+  final String? selected;
+  final ValueChanged<String> onSelect;
+  const _AdminLocationSheet({required this.selected, required this.onSelect});
+
+  @override
+  State<_AdminLocationSheet> createState() => _AdminLocationSheetState();
+}
+
+class _AdminLocationSheetState extends State<_AdminLocationSheet> {
+  String _query = '';
+  final _ctrl = TextEditingController();
+  bool _isOverseas = false;
+  bool _loading = true;
+  String? _error;
+  Map<String, List<String>> _cityGroups = {};
+  List<String> _countries = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final client = SupabaseService.instance.client;
+      final cityRows = await client.rpc('get_qualifying_cities') as List;
+      final countryRows = await client.rpc('get_qualifying_countries') as List;
+
+      final groups = <String, List<String>>{};
+      for (final row in cityRows) {
+        final province = row['province'] as String;
+        final city = row['city'] as String;
+        groups.putIfAbsent(province, () => []).add(city);
+      }
+      final countries = countryRows.map((r) => r['country'] as String).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _cityGroups = groups;
+        _countries = countries;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() { _loading = false; _error = 'Could not load locations. Please try again.'; });
+    }
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = _S.of(context);
+    final q = _query.trim().toLowerCase();
+
+    final filteredCities = <String, List<String>>{};
+    _cityGroups.forEach((province, cities) {
+      final matches = q.isEmpty ? cities : cities.where((c) => c.toLowerCase().contains(q)).toList();
+      if (matches.isNotEmpty) filteredCities[province] = matches;
+    });
+    final filteredCountries = q.isEmpty ? _countries : _countries.where((c) => c.toLowerCase().contains(q)).toList();
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.88,
+      decoration: const BoxDecoration(color: Color(0xFF0F0D1A), borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      child: Column(
+        children: [
+          SizedBox(height: s.s(10)),
+          Container(width: s.d(40), height: s.d(4), decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(s.s(2)))),
+          Padding(
+            padding: EdgeInsets.fromLTRB(s.s(20), s.s(14), s.s(20), 0),
+            child: Row(
+              children: [
+                Text('Select Location', style: TextStyle(fontSize: s.f(17), fontWeight: FontWeight.w800, color: Colors.white)),
+                const Spacer(),
+                if (widget.selected != null)
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: Text('Cancel', style: TextStyle(fontSize: s.f(13), color: Colors.white.withOpacity(0.4), fontWeight: FontWeight.w600)),
+                  ),
+              ],
+            ),
+          ),
+          SizedBox(height: s.s(12)),
+          // Pakistan / Overseas toggle — same two-step pattern as the
+          // website and user app. Switching modes clears any in-progress
+          // search but keeps the currently-selected value untouched.
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: s.s(20)),
+            child: Row(children: [
+              Expanded(child: _AdminLocationModeButton(label: 'Pakistan', selected: !_isOverseas, onTap: () => setState(() => _isOverseas = false))),
+              SizedBox(width: s.s(8)),
+              Expanded(child: _AdminLocationModeButton(label: 'Overseas', selected: _isOverseas, onTap: () => setState(() => _isOverseas = true))),
+            ]),
+          ),
+          SizedBox(height: s.s(12)),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: s.s(16)),
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(2)),
+              decoration: BoxDecoration(color: const Color(0xFF16132A), borderRadius: BorderRadius.circular(s.s(14)), border: Border.all(color: Colors.white.withOpacity(0.1))),
+              child: Row(
+                children: [
+                  Icon(Icons.search_rounded, size: s.d(20), color: Colors.white.withOpacity(0.3)),
+                  SizedBox(width: s.s(8)),
+                  Expanded(
+                    child: TextField(
+                      controller: _ctrl, autofocus: false,
+                      onChanged: (v) => setState(() => _query = v),
+                      style: TextStyle(fontSize: s.f(14), color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: _isOverseas ? 'Search country...' : 'Search city...',
+                        hintStyle: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: s.f(14)),
+                        border: InputBorder.none, isDense: true,
+                        contentPadding: EdgeInsets.symmetric(vertical: s.s(12)),
+                      ),
+                    ),
+                  ),
+                  if (_query.isNotEmpty)
+                    GestureDetector(
+                      onTap: () { _ctrl.clear(); setState(() => _query = ''); },
+                      child: Icon(Icons.close_rounded, size: s.d(18), color: Colors.white.withOpacity(0.3)),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(height: s.s(8)),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator(color: kPurple))
+                : _error != null
+                    ? Center(child: Padding(
+                        padding: EdgeInsets.all(s.s(20)),
+                        child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: Colors.white.withOpacity(0.5))),
+                          SizedBox(height: s.s(12)),
+                          TextButton(onPressed: _load, child: const Text('Retry')),
+                        ]),
+                      ))
+                    : _isOverseas
+                        ? (filteredCountries.isEmpty
+                            ? Center(child: Text('No matching countries', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: s.f(14))))
+                            : ListView(
+                                padding: EdgeInsets.fromLTRB(s.s(16), s.s(4), s.s(16), s.s(24)),
+                                children: filteredCountries.map((country) {
+                                  final isSelected = country == widget.selected;
+                                  return GestureDetector(
+                                    onTap: () => widget.onSelect(country),
+                                    child: Container(
+                                      margin: EdgeInsets.only(bottom: s.s(4)),
+                                      padding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(12)),
+                                      decoration: BoxDecoration(
+                                        color: isSelected ? kPurple.withOpacity(0.15) : const Color(0xFF16132A),
+                                        borderRadius: BorderRadius.circular(s.s(12)),
+                                        border: Border.all(color: isSelected ? kPurple.withOpacity(0.4) : Colors.white.withOpacity(0.06)),
+                                      ),
+                                      child: Row(children: [
+                                        Expanded(child: Text(country, style: TextStyle(fontSize: s.f(14), color: isSelected ? kPurple : Colors.white.withOpacity(0.85), fontWeight: isSelected ? FontWeight.w700 : FontWeight.w400))),
+                                        if (isSelected) Icon(Icons.check_rounded, color: kPurple, size: s.d(18)),
+                                      ]),
+                                    ),
+                                  );
+                                }).toList(),
+                              ))
+                        : (filteredCities.isEmpty
+                            ? Center(child: Text('No matching cities', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: s.f(14))))
+                            : ListView(
+                                padding: EdgeInsets.fromLTRB(s.s(16), s.s(4), s.s(16), s.s(24)),
+                                children: [
+                                  for (final entry in filteredCities.entries) ...[
+                                    Padding(
+                                      padding: EdgeInsets.fromLTRB(s.s(4), s.s(12), s.s(4), s.s(6)),
+                                      child: Text(entry.key, style: TextStyle(fontSize: s.f(11), fontWeight: FontWeight.w700, color: kPurple.withOpacity(0.8), letterSpacing: 0.5)),
+                                    ),
+                                    ...entry.value.map((city) {
+                                      final isSelected = city == widget.selected;
+                                      return GestureDetector(
+                                        onTap: () => widget.onSelect(city),
+                                        child: Container(
+                                          margin: EdgeInsets.only(bottom: s.s(4)),
+                                          padding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(12)),
+                                          decoration: BoxDecoration(
+                                            color: isSelected ? kPurple.withOpacity(0.15) : const Color(0xFF16132A),
+                                            borderRadius: BorderRadius.circular(s.s(12)),
+                                            border: Border.all(color: isSelected ? kPurple.withOpacity(0.4) : Colors.white.withOpacity(0.06)),
+                                          ),
+                                          child: Row(children: [
+                                            Expanded(child: Text(city, style: TextStyle(fontSize: s.f(14), color: isSelected ? kPurple : Colors.white.withOpacity(0.85), fontWeight: isSelected ? FontWeight.w700 : FontWeight.w400))),
+                                            if (isSelected) Icon(Icons.check_rounded, color: kPurple, size: s.d(18)),
+                                          ]),
+                                        ),
+                                      );
+                                    }),
+                                  ],
+                                ],
+                              )),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminLocationModeButton extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _AdminLocationModeButton({required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = _S.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(vertical: s.s(10)),
+        decoration: BoxDecoration(
+          color: selected ? kPurple.withOpacity(0.18) : const Color(0xFF16132A),
+          borderRadius: BorderRadius.circular(s.s(10)),
+          border: Border.all(color: selected ? kPurple.withOpacity(0.5) : Colors.white.withOpacity(0.08)),
+        ),
+        child: Text(label, textAlign: TextAlign.center,
+          style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: selected ? kPurple : Colors.white.withOpacity(0.5))),
+      ),
+    );
+  }
+}
+
 class _AdminCityPicker extends StatelessWidget {
   final String? value;
   final ValueChanged<String?> onChanged;
@@ -1810,73 +2443,6 @@ class _BoostListItemState extends State<_BoostListItem> {
           ],
         ],
       ),
-    );
-  }
-}
-
-// ── Edit Requests Badge ────────────────────────────────────────────────────
-// Shows a badge with pending count; taps open AdminEditRequestsScreen.
-class _EditRequestsBadge extends StatefulWidget {
-  final _S s;
-  const _EditRequestsBadge({required this.s});
-  @override State<_EditRequestsBadge> createState() => _EditRequestsBadgeState();
-}
-
-class _EditRequestsBadgeState extends State<_EditRequestsBadge> {
-  int _pendingCount = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadCount();
-  }
-
-  Future<void> _loadCount() async {
-    try {
-      final res = await Supabase.instance.client
-          .from('profile_edit_requests')
-          .select('proposal_id')
-          .eq('status', 'pending');
-      final distinct = (res as List).map((e) => e['proposal_id']).toSet();
-      if (mounted) setState(() => _pendingCount = distinct.length);
-    } catch (_) {}
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = widget.s;
-    return GestureDetector(
-      onTap: () async {
-        await Navigator.push(context,
-          MaterialPageRoute(builder: (_) => const AdminEditRequestsScreen()));
-        _loadCount(); // refresh count after returning
-      },
-      child: Stack(clipBehavior: Clip.none, children: [
-        Container(
-          width: s.d(44), height: s.d(44),
-          decoration: BoxDecoration(
-            color: _pendingCount > 0 ? kPurple.withOpacity(0.15) : const Color(0xFF16132A),
-            borderRadius: BorderRadius.circular(s.s(14)),
-            border: Border.all(
-              color: _pendingCount > 0 ? kPurple.withOpacity(0.4) : Colors.white.withOpacity(0.08)),
-          ),
-          child: Icon(Icons.rate_review_rounded, size: s.d(20),
-              color: _pendingCount > 0 ? kPurple : Colors.white.withOpacity(0.4)),
-        ),
-        if (_pendingCount > 0)
-          Positioned(
-            right: -4, top: -4,
-            child: Container(
-              padding: EdgeInsets.symmetric(horizontal: s.s(5), vertical: s.s(1)),
-              decoration: BoxDecoration(
-                color: kRose, borderRadius: BorderRadius.circular(s.s(10)),
-                border: Border.all(color: const Color(0xFF0F0D1E), width: 1.5),
-              ),
-              child: Text('$_pendingCount',
-                style: TextStyle(color: Colors.white, fontSize: s.f(9), fontWeight: FontWeight.w800)),
-            ),
-          ),
-      ]),
     );
   }
 }

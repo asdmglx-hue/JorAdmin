@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../widgets/photo_crop_dialog.dart';
@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../models/admin_models.dart';
+import '../services/supabase_service.dart';
+import '../widgets/country_picker.dart';
 
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
@@ -23,6 +25,38 @@ class _S {
   }
 }
 
+// ── Formatters (mirrors the Submit Proposal form in the user app, so
+//    admin-entered numbers/CNICs look and behave the same way) ─────────────
+
+// Same dash placement as the Submit Proposal form's CNIC field: XXXXX-XXXXXXX-X.
+class _AdminCnicFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final digits = newValue.text.replaceAll('-', '');
+    if (digits.length > 13) return oldValue;
+    final buf = StringBuffer();
+    for (int i = 0; i < digits.length; i++) {
+      if (i == 5 || i == 12) buf.write('-');
+      buf.write(digits[i]);
+    }
+    final formatted = buf.toString();
+    return TextEditingValue(text: formatted, selection: TextSelection.collapsed(offset: formatted.length));
+  }
+}
+
+// Re-applies the CNIC formatter to a value that was set directly on a
+// controller (e.g. existing data loaded on screen open), so it looks
+// correctly formatted immediately rather than only after the admin edits it.
+String _formatCnicDisplay(String raw) =>
+    _AdminCnicFormatter().formatEditUpdate(const TextEditingValue(text: ''), TextEditingValue(text: raw)).text;
+
+// Re-applies the same Pakistani spacing used on the Submit Proposal form to
+// a phone value set directly on a controller, so it displays correctly the
+// moment the screen opens.
+String _formatPakDisplay(String raw) =>
+    PakistaniPhoneFormatter().formatEditUpdate(const TextEditingValue(text: ''), TextEditingValue(text: raw)).text;
+
+
 class AdminEditUserScreen extends StatefulWidget {
   final AdminUser user;
   final AdminService svc;
@@ -35,6 +69,11 @@ class AdminEditUserScreen extends StatefulWidget {
 
 class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   late AdminUser _user;
+
+  // Country code for the phone fields (mirrors the Submit Proposal form's
+  // country picker in the user app).
+  CountryCode _selectedCountry = CountryCode.pakistan;
+  CountryCode _selectedCountry2 = CountryCode.pakistan;
 
   // Text controllers
   late TextEditingController _nameCtrl;
@@ -80,9 +119,34 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     _user = widget.user;
     _nameCtrl     = TextEditingController(text: _user.name);
     _ageCtrl      = TextEditingController(text: _user.age.toString());
-    _phoneCtrl    = TextEditingController(text: _user.contactPhone);
-    _phone2Ctrl   = TextEditingController(text: _user.contactPhone2 ?? '');
-    _cnicCtrl     = TextEditingController(text: _user.cnic ?? '');
+    // Phone numbers may be stored as "{dialCode} {digits}" (numbers that
+    // came through the Submit Proposal form) or as a bare local number
+    // (older admin-entered data). Split off a leading dial code when present
+    // so the country selector shows the right flag instead of always
+    // defaulting to Pakistan.
+    final phoneRaw = _user.contactPhone.trim();
+    final phoneSpace = phoneRaw.indexOf(' ');
+    if (phoneSpace > 0) {
+      final matched = countryCodeForDial(phoneRaw.substring(0, phoneSpace));
+      if (matched != null) _selectedCountry = matched;
+      _phoneCtrl = TextEditingController(text: phoneRaw.substring(phoneSpace + 1).trim());
+    } else {
+      _phoneCtrl = TextEditingController(text: phoneRaw);
+    }
+    if (_selectedCountry.dialCode == '+92') _phoneCtrl.text = _formatPakDisplay(_phoneCtrl.text);
+
+    final phone2Raw = (_user.contactPhone2 ?? '').trim();
+    final phone2Space = phone2Raw.indexOf(' ');
+    if (phone2Space > 0) {
+      final matched2 = countryCodeForDial(phone2Raw.substring(0, phone2Space));
+      if (matched2 != null) _selectedCountry2 = matched2;
+      _phone2Ctrl = TextEditingController(text: phone2Raw.substring(phone2Space + 1).trim());
+    } else {
+      _phone2Ctrl = TextEditingController(text: phone2Raw);
+    }
+    if (_selectedCountry2.dialCode == '+92') _phone2Ctrl.text = _formatPakDisplay(_phone2Ctrl.text);
+
+    _cnicCtrl     = TextEditingController(text: _formatCnicDisplay(_user.cnic ?? ''));
     _passwordCtrl = TextEditingController(text: _user.password ?? '');
     // Height: store inches internally, display as feet/inches in read-only
     final h = _user.heightInches.round();
@@ -115,6 +179,19 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     _fatherVal    = _user.fatherAlive == true ? 'Alive' : (_user.fatherAlive == false ? 'Deceased' : '');
     _motherVal    = _user.motherAlive == true ? 'Alive' : (_user.motherAlive == false ? 'Deceased' : '');
     _disabilityVal = _user.hasDisability ?? '';
+
+    for (final c in [
+      _nameCtrl, _ageCtrl, _phoneCtrl, _phone2Ctrl, _cnicCtrl, _passwordCtrl, _heightCtrl, _weightCtrl,
+      _aboutCtrl, _lookingForCtrl, _instCtrl, _degreeTitleCtrl, _inst2Ctrl, _degreeTitle2Ctrl,
+      _inst3Ctrl, _degreeTitle3Ctrl, _boysCtrl, _girlsCtrl, _houseSizeCtrl, _carCtrl,
+      _brothersCtrl, _sistersCtrl,
+      _adminNotesCtrl, _locationCtrl, _disabilityDetailsCtrl, _countryCtrl,
+      _professionCtrl, _fatherOccCtrl, _motherOccCtrl,
+    ]) { c.addListener(_onFieldChanged); }
+  }
+
+  void _onFieldChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -135,12 +212,12 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     return s == 'divorced' || s == 'khula' || s == 'widowed';
   }
 
-  void _save() {
-    final updated = _user.copyWith(
+  AdminUser _buildUpdated() {
+    return _user.copyWith(
       name: _nameCtrl.text.trim(),
       age: int.tryParse(_ageCtrl.text) ?? _user.age,
-      contactPhone: _phoneCtrl.text.trim(),
-      contactPhone2: _phone2Ctrl.text.trim().isEmpty ? null : _phone2Ctrl.text.trim(),
+      contactPhone: formatDialedPhone(_selectedCountry.dialCode, _phoneCtrl.text),
+      contactPhone2: _phone2Ctrl.text.trim().isEmpty ? null : formatDialedPhone(_selectedCountry2.dialCode, _phone2Ctrl.text),
       cnic: _cnicCtrl.text.trim().isEmpty ? null : _cnicCtrl.text.trim(),
       password: _passwordCtrl.text.trim().isEmpty ? null : _passwordCtrl.text.trim(),
       heightInches: () {
@@ -173,15 +250,43 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       country: _countryCtrl.text.trim().isEmpty ? null : _countryCtrl.text.trim(),
       disabilityDetails: _disabilityDetailsCtrl.text.trim().isEmpty ? null : _disabilityDetailsCtrl.text.trim(),
     );
+  }
+
+  // True only when the pending edits actually differ from the original
+  // record — drives whether the Save button appears active or inactive.
+  // Ignores cosmetic formatting differences when diffing, so reformatting
+  // old data on load doesn't itself count as an unsaved change — only real
+  // value edits should:
+  //  - CNIC: dashes are stripped either way.
+  //  - Phone: compares only the significant local digits (last 10), ignoring
+  //    country code, a leading trunk "0", and spacing — "03001234567",
+  //    "+92 3001234567" and "300 1234567" all normalize to the same value.
+  String _phoneCompareKey(String v) {
+    var digits = v.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.length > 10) digits = digits.substring(digits.length - 10);
+    return digits.replaceFirst(RegExp(r'^0+'), '');
+  }
+
+  Map<String, dynamic> _normalizedForCompare(Map<String, dynamic> json) {
+    final m = Map<String, dynamic>.from(json);
+    if (m['cnic'] is String) m['cnic'] = (m['cnic'] as String).replaceAll('-', '');
+    for (final k in ['contact_phone', 'contact_phone_2']) {
+      if (m[k] is String) m[k] = _phoneCompareKey(m[k] as String);
+    }
+    return m;
+  }
+
+  bool get _hasChanges {
+    final a = jsonEncode(_normalizedForCompare(_buildUpdated().toUpdateJson()));
+    final b = jsonEncode(_normalizedForCompare(widget.user.toUpdateJson()));
+    return a != b;
+  }
+
+  void _save() {
+    if (!_hasChanges) return;
+    final updated = _buildUpdated();
     widget.svc.updateUser(updated);
     HapticFeedback.mediumImpact();
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: const Text('Profile updated successfully'),
-      backgroundColor: kGreen,
-      behavior: SnackBarBehavior.floating,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    duration: const Duration(milliseconds: 2500),
-    ));
     Navigator.pop(context);
   }
 
@@ -218,15 +323,23 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
         ),
         actions: [
           if (!widget.readOnly) ...[          TextButton(
-            onPressed: _save,
+            onPressed: _hasChanges ? _save : null,
             child: Container(
               padding: EdgeInsets.symmetric(horizontal: s.s(16), vertical: s.s(6)),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [kPurple, kPurpleDeep]),
+                gradient: _hasChanges
+                    ? const LinearGradient(colors: [kPurple, kPurpleDeep])
+                    : null,
+                color: _hasChanges ? null : Colors.white.withOpacity(0.06),
                 borderRadius: BorderRadius.circular(s.s(10)),
+                border: _hasChanges ? null : Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: Text('Save',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: s.f(13))),
+                  style: TextStyle(
+                    color: _hasChanges ? Colors.white : Colors.white.withOpacity(0.3),
+                    fontWeight: FontWeight.w700,
+                    fontSize: s.f(13),
+                  )),
             ),
           ),
           SizedBox(width: s.s(8)),
@@ -246,9 +359,12 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           _field('Full Name', _nameCtrl),
           _field('Age', _ageCtrl, type: TextInputType.number),
           _HeightDropdowns(controller: _heightCtrl, darkTheme: true, label: 'Height'),
-          _field('Phone Number', _phoneCtrl, type: TextInputType.phone),
-          _field('Second Phone Number (optional)', _phone2Ctrl, type: TextInputType.phone),
-          _field('CNIC Number', _cnicCtrl, type: TextInputType.number),
+          _phoneField('Phone Number', _phoneCtrl, _selectedCountry, (c) => setState(() => _selectedCountry = c)),
+          _phoneField('Second Phone Number (optional)', _phone2Ctrl, _selectedCountry2, (c) => setState(() => _selectedCountry2 = c), required: false),
+          _field('CNIC Number', _cnicCtrl, type: TextInputType.number, formatters: [
+            FilteringTextInputFormatter.allow(RegExp(r'[\d-]')),
+            _AdminCnicFormatter(),
+          ]),
           _field('Password', _passwordCtrl),
           _drop('Gender', _user.gender, ['Male', 'Female'],
               (v) => setState(() => _user = _user.copyWith(gender: v))),
@@ -281,6 +397,9 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               _subField('Sons', _boysCtrl, type: TextInputType.number),
               _subField('Daughters', _girlsCtrl, type: TextInputType.number),
             ]),
+          _drop('Open to Polygamy?', _user.openToPolygamy ?? '', ['Yes', 'No'],
+              (v) => setState(() => _user = _user.copyWith(openToPolygamy: v.isEmpty ? null : v)),
+              infoText: 'Polygamy means having more than one wife or marrying a man who already has a wife.'),
           _multiField('About Yourself', _aboutCtrl, maxLength: 200),
           _multiField('Looking For', _lookingForCtrl, maxLength: 200),
 
@@ -294,9 +413,10 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               Expanded(child: _EditablePhotoSlot(
                 label: 'Profile Photo',
                 icon: Icons.person_rounded,
-                base64Data: _user.profilePhotoBase64,
                 photoUrl: _user.profilePhoto,
-                onChanged: (b64) => setState(() => _user = _user.copyWith(profilePhotoBase64: b64)),
+                cnicOrId: _user.cnic ?? _user.id,
+                photoType: 'profile',
+                onChanged: (url) => setState(() => _user = _user.copyWith(profilePhoto: url)),
                 crop: true,
               )),
             ],
@@ -309,17 +429,19 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               Expanded(child: _EditablePhotoSlot(
                 label: 'CNIC Front',
                 icon: Icons.credit_card_rounded,
-                base64Data: _user.cnicFrontBase64,
                 photoUrl: _user.cnicFront,
-                onChanged: (b64) => setState(() => _user = _user.copyWith(cnicFrontBase64: b64)),
+                cnicOrId: _user.cnic ?? _user.id,
+                photoType: 'cnic_front',
+                onChanged: (url) => setState(() => _user = _user.copyWith(cnicFront: url)),
               )),
               SizedBox(width: _S.of(context).s(10)),
               Expanded(child: _EditablePhotoSlot(
                 label: 'CNIC Back',
                 icon: Icons.credit_card_rounded,
-                base64Data: _user.cnicBackBase64,
                 photoUrl: _user.cnicBack,
-                onChanged: (b64) => setState(() => _user = _user.copyWith(cnicBackBase64: b64)),
+                cnicOrId: _user.cnic ?? _user.id,
+                photoType: 'cnic_back',
+                onChanged: (url) => setState(() => _user = _user.copyWith(cnicBack: url)),
               )),
             ],
           ),
@@ -332,6 +454,9 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               (_user.brothers != null && _user.brothers! > 0) || (_user.sisters != null && _user.sisters! > 0) ||
               _user.hasSiblings != null)
             _subHeader('Family'),
+          if (!widget.readOnly || (_user.familyType != null && _user.familyType!.isNotEmpty))
+            _drop('Family Type', _user.familyType ?? '', ['Joint family', 'Separated Family'],
+                (v) => setState(() => _user = _user.copyWith(familyType: v.isEmpty ? null : v))),
           if (!widget.readOnly || _user.fatherAlive != null || _user.motherAlive != null)
             _row([
               _drop('Father', _fatherVal, ['Alive', 'Deceased'],
@@ -360,12 +485,18 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           _subHeader('Degree'),
           _field('Title', _degreeTitleCtrl),
           _field('Institute', _instCtrl),
+          _certField(label: 'Degree Certificate', url: _user.degreeCertificateUrl, cnicOrId: _user.cnic ?? _user.id,
+            photoType: 'degree_certificate', onChanged: (url) => setState(() => _user = _user.copyWith(degreeCertificateUrl: url))),
           _subHeader('Degree 2'),
           _field('Title', _degreeTitle2Ctrl),
           _field('Institute 2', _inst2Ctrl),
+          _certField(label: 'Degree 2 Certificate', url: _user.degreeCertificate2Url, cnicOrId: _user.cnic ?? _user.id,
+            photoType: 'degree_certificate_2', onChanged: (url) => setState(() => _user = _user.copyWith(degreeCertificate2Url: url))),
           _subHeader('Degree 3'),
           _field('Title', _degreeTitle3Ctrl),
           _field('Institute 3', _inst3Ctrl),
+          _certField(label: 'Degree 3 Certificate', url: _user.degreeCertificate3Url, cnicOrId: _user.cnic ?? _user.id,
+            photoType: 'degree_certificate_3', onChanged: (url) => setState(() => _user = _user.copyWith(degreeCertificate3Url: url))),
 
           // ── CAREER ──
           if (!widget.readOnly || _user.monthlyIncome != null || _user.employmentType != null)
@@ -395,14 +526,14 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               ['High', 'Moderate', 'Low'],
               (v) => setState(() => _user = _user.copyWith(practiceLevel: v.isEmpty ? null : v))),
           if (!widget.readOnly)
-            if (_user.gender == 'Female')
+            if (_user.gender.trim().toLowerCase() == 'female')
               _drop('Wears Hijab', _user.hijab ?? '', ['Yes', 'No', 'Sometimes'],
                   (v) => setState(() => _user = _user.copyWith(hijab: v.isEmpty ? null : v)))
             else
               _drop('Has Beard', _user.beard ?? '', ['Yes', 'No', 'Trimmed'],
                   (v) => setState(() => _user = _user.copyWith(beard: v.isEmpty ? null : v)))
           else if (_user.hijab != null || _user.beard != null)
-            if (_user.gender == 'Female')
+            if (_user.gender.trim().toLowerCase() == 'female')
               _drop('Wears Hijab', _user.hijab ?? '', ['Yes', 'No', 'Sometimes'],
                   (v) => setState(() => _user = _user.copyWith(hijab: v.isEmpty ? null : v)))
             else
@@ -460,19 +591,19 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
   // ── Read-only profile view (same style as Review Proposal screen) ──────────
 
-  Widget _pR(String label, String value) {
+  Widget _pR(String label, String value, {double? labelWidth}) {
     final s = _S.of(context);
     return Padding(
       padding: EdgeInsets.symmetric(vertical: s.s(7)),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: s.d(130), child: Text(label, style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: s.f(12.5)))),
+        SizedBox(width: s.d(labelWidth ?? 130), child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: s.f(12.5)))),
         Expanded(child: Text(value, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: s.f(13)), textAlign: TextAlign.right)),
       ]),
     );
   }
 
 
-  Widget _pSub(String label, String value) {
+  Widget _pSub(String label, String value, {String? certUrl}) {
     final s = _S.of(context);
     return Padding(
       padding: EdgeInsets.only(left: s.s(16), top: s.s(2), bottom: s.s(6)),
@@ -480,6 +611,13 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
         Text('↳ ', style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.6))),
         SizedBox(width: s.d(114), child: Text(label, style: TextStyle(fontSize: s.f(12), color: Colors.white.withOpacity(0.4), fontWeight: FontWeight.w500))),
         Expanded(child: Text(value, style: TextStyle(fontSize: s.f(12.5), color: Colors.white, fontWeight: FontWeight.w600), textAlign: TextAlign.right)),
+        if (certUrl != null && certUrl.isNotEmpty) ...[
+          SizedBox(width: s.s(8)),
+          GestureDetector(
+            onTap: () => _showCertPopup(certUrl),
+            child: Text('View', style: TextStyle(fontSize: s.f(12), color: kPurple, fontWeight: FontWeight.w700, decoration: TextDecoration.underline)),
+          ),
+        ],
       ]),
     );
   }
@@ -513,13 +651,34 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     final ft = (u.heightInches / 12).floor();
     final inch = (u.heightInches % 12).round();
     final heightLabel = "$ft\'$inch\"";
-    final hasFamilyData = u.fatherAlive != null || u.motherAlive != null || u.hasSiblings != null;
+    final hasFamilyData = u.fatherAlive != null || u.motherAlive != null || u.hasSiblings != null || (u.familyType != null && u.familyType!.isNotEmpty);
     final hasEducationData = u.education.isNotEmpty || (u.institute != null && u.institute!.isNotEmpty);
     final hasCareerData = u.monthlyIncome != null || u.employmentType != null;
     final hasPhysicalData = _weightCtrl.text.isNotEmpty || u.complexion != null;
     final hasReligionData = u.practiceLevel != null || u.hijab != null || u.beard != null;
     final hasAssetsData = (u.hasCar != null && u.hasCar != 'No' && u.hasCar!.toLowerCase() != 'false') || (u.hasOtherProperty == 'Yes' && u.otherProperty != null);
     final hasHealthData = u.hasDisability != null || u.physicallyActive != null || u.smokes != null;
+    // Whichever subsection actually ends up first (some get skipped
+    // entirely when a profile has no data for them) shouldn't draw its
+    // own leading divider — otherwise it sits right under ADDITIONAL
+    // INFO's own divider with nothing in between, looking like a stray
+    // double line. Figures out the real first one instead of assuming
+    // FAMILY always is.
+    final firstSubsection = hasFamilyData
+        ? 'family'
+        : hasEducationData
+            ? 'education'
+            : hasCareerData
+                ? 'career'
+                : hasPhysicalData
+                    ? 'physical'
+                    : hasReligionData
+                        ? 'religion'
+                        : hasAssetsData
+                            ? 'assets'
+                            : hasHealthData
+                                ? 'health'
+                                : '';
     final hasAdditionalData = hasFamilyData || hasEducationData || hasCareerData ||
         hasPhysicalData || hasReligionData || hasAssetsData || hasHealthData;
 
@@ -529,13 +688,10 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       Center(child: CircleAvatar(
         radius: s.d(44),
         backgroundColor: u.gender.toLowerCase() == 'female' ? kRose : kPurple,
-        backgroundImage: (u.profilePhotoBase64 != null && u.profilePhotoBase64!.isNotEmpty)
-            ? MemoryImage(base64Decode(u.profilePhotoBase64!))
-            : (u.profilePhoto != null && u.profilePhoto!.isNotEmpty)
-                ? NetworkImage(u.profilePhoto!) as ImageProvider
-                : null,
-        child: (u.profilePhotoBase64 == null || u.profilePhotoBase64!.isEmpty) &&
-               (u.profilePhoto == null || u.profilePhoto!.isEmpty)
+        backgroundImage: (u.profilePhoto != null && u.profilePhoto!.isNotEmpty)
+            ? NetworkImage(u.profilePhoto!) as ImageProvider
+            : null,
+        child: (u.profilePhoto == null || u.profilePhoto!.isEmpty)
             ? Text(u.name.isNotEmpty ? u.name.substring(0, 1) : '?',
                 style: TextStyle(fontSize: s.f(28), fontWeight: FontWeight.w800, color: Colors.white))
             : null,
@@ -577,6 +733,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
             if (u.boys != null && u.boys! > 0) _pSub('Sons', u.boys.toString()),
             if (u.girls != null && u.girls! > 0) _pSub('Daughters', u.girls.toString()),
           ],
+          if (u.openToPolygamy != null && u.openToPolygamy!.isNotEmpty) _pR('Open to Polygamy?', u.openToPolygamy!),
           if (u.about != null && u.about!.isNotEmpty) _pR('About', u.about!),
           if (u.lookingFor != null && u.lookingFor!.isNotEmpty) _pR('Looking For', u.lookingFor!),
 
@@ -585,7 +742,8 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
           // ── FAMILY ──
           if (hasFamilyData) ...[
-            _pSecLight('FAMILY', first: true),
+            _pSecLight('FAMILY', first: firstSubsection == 'family'),
+            if (u.familyType != null && u.familyType!.isNotEmpty) _pR('Family Type', u.familyType!),
             if (u.fatherAlive != null) _pR('Father', u.fatherAlive! ? 'Alive' : 'Deceased'),
             if (u.fatherOccupation != null) _pSub('Occupation', u.fatherOccupation!),
             if (u.motherAlive != null) _pR('Mother', u.motherAlive! ? 'Alive' : 'Deceased'),
@@ -597,33 +755,33 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
           // ── EDUCATION ──
           if (hasEducationData) ...[
-            _pSecLight('EDUCATION'),
-            if (u.education.isNotEmpty) _pR('Education Level (Highest)', u.education),
-            if (u.degreeTitle != null && u.degreeTitle!.isNotEmpty) _pSub('Degree', u.degreeTitle!),
+            _pSecLight('EDUCATION', first: firstSubsection == 'education'),
+            if (u.education.isNotEmpty) _pR('Education Level (Highest)', u.education, labelWidth: 185),
+            if (u.degreeTitle != null && u.degreeTitle!.isNotEmpty) _pSub('Degree', u.degreeTitle!, certUrl: u.degreeCertificateUrl),
             if (u.institute != null && u.institute!.isNotEmpty) _pSub('Institute', u.institute!),
-            if (u.degreeTitle2 != null && u.degreeTitle2!.isNotEmpty) _pSub('Degree 2', u.degreeTitle2!),
+            if (u.degreeTitle2 != null && u.degreeTitle2!.isNotEmpty) _pSub('Degree 2', u.degreeTitle2!, certUrl: u.degreeCertificate2Url),
             if (u.institute2 != null && u.institute2!.isNotEmpty) _pSub('Institute 2', u.institute2!),
-            if (u.degreeTitle3 != null && u.degreeTitle3!.isNotEmpty) _pSub('Degree 3', u.degreeTitle3!),
+            if (u.degreeTitle3 != null && u.degreeTitle3!.isNotEmpty) _pSub('Degree 3', u.degreeTitle3!, certUrl: u.degreeCertificate3Url),
             if (u.institute3 != null && u.institute3!.isNotEmpty) _pSub('Institute 3', u.institute3!),
           ],
 
           // ── CAREER ──
           if (hasCareerData) ...[
-            _pSecLight('CAREER'),
+            _pSecLight('CAREER', first: firstSubsection == 'career'),
             if (u.employmentType != null) _pR('Employment Type', u.employmentType!),
             if (u.monthlyIncome != null) _pR('Monthly Income', u.monthlyIncome!),
           ],
 
           // ── PHYSICAL ──
           if (hasPhysicalData) ...[
-            _pSecLight('PHYSICAL'),
+            _pSecLight('PHYSICAL', first: firstSubsection == 'physical'),
             if (_weightCtrl.text.isNotEmpty) _pR('Weight', _weightCtrl.text + ' kg'),
             if (u.complexion != null) _pR('Complexion', u.complexion!),
           ],
 
           // ── RELIGION ──
           if (hasReligionData) ...[
-            _pSecLight('RELIGION'),
+            _pSecLight('RELIGION', first: firstSubsection == 'religion'),
             if (u.practiceLevel != null) _pR('Practice Level', u.practiceLevel!),
             if (u.gender.toLowerCase() == 'female' && u.hijab != null) _pR('Hijab', u.hijab!),
             if (u.gender.toLowerCase() == 'male' && u.beard != null) _pR('Beard', u.beard!),
@@ -631,7 +789,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
           // ── OTHER ASSETS ──
           if (hasAssetsData) ...[
-            _pSecLight('OTHER ASSETS'),
+            _pSecLight('OTHER ASSETS', first: firstSubsection == 'assets'),
             if (u.hasCar != null && u.hasCar != 'No' && u.hasCar!.toLowerCase() != 'false' && u.hasCar!.toLowerCase() != 'no') _pR('Car', u.hasCar!),
 
             if (u.otherProperty != null) _pR('Property', u.otherProperty!),
@@ -639,7 +797,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
           // ── HEALTH ──
           if (hasHealthData) ...[
-            _pSecLight('HEALTH'),
+            _pSecLight('HEALTH', first: firstSubsection == 'health'),
             if (u.hasDisability != null) _pR('Disability', (u.hasDisability == 'true' || u.hasDisability == 'Yes') ? 'Yes' : (u.hasDisability == 'false' || u.hasDisability == 'No') ? 'No' : u.hasDisability!),
             if ((u.hasDisability == 'Yes' || u.hasDisability == 'true') && u.disabilityDetails != null && u.disabilityDetails!.isNotEmpty)
               _pSub('Details', u.disabilityDetails!),
@@ -651,14 +809,14 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       ),
 
       // ── CNIC Photos ──
-      if (u.cnicFrontBase64 != null || u.cnicBackBase64 != null || u.cnicFront != null || u.cnicBack != null) ...[
+      if (u.cnicFront != null || u.cnicBack != null) ...[
         SizedBox(height: s.s(16)),
         Text('CNIC', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
         SizedBox(height: s.s(8)),
         Row(children: [
-          if (u.cnicFrontBase64 != null || u.cnicFront != null) Expanded(child: _AdminPhotoSlot(label: 'Front', icon: Icons.credit_card_rounded, base64Data: u.cnicFrontBase64, photoUrl: u.cnicFront)),
-          if ((u.cnicFrontBase64 != null || u.cnicFront != null) && (u.cnicBackBase64 != null || u.cnicBack != null)) SizedBox(width: s.s(10)),
-          if (u.cnicBackBase64 != null || u.cnicBack != null) Expanded(child: _AdminPhotoSlot(label: 'Back', icon: Icons.credit_card_rounded, base64Data: u.cnicBackBase64, photoUrl: u.cnicBack)),
+          if (u.cnicFront != null) Expanded(child: _AdminPhotoSlot(label: 'Front', icon: Icons.credit_card_rounded, photoUrl: u.cnicFront)),
+          if (u.cnicFront != null && u.cnicBack != null) SizedBox(width: s.s(10)),
+          if (u.cnicBack != null) Expanded(child: _AdminPhotoSlot(label: 'Back', icon: Icons.credit_card_rounded, photoUrl: u.cnicBack)),
         ]),
       ],
 
@@ -799,7 +957,96 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     );
   }
 
-  Widget _field(String label, TextEditingController ctrl, {TextInputType? type}) {
+  // Handles both modes this screen already supports: in read-only View
+  // mode, shows a tappable "View Certificate" link (matching _viewValue's
+  // styling) when one exists and nothing at all when it doesn't; in Edit
+  // mode, reuses the exact same _EditablePhotoSlot already used for
+  // profile/CNIC photos — same R2 upload path, just a different photoType.
+  Widget _certField({required String label, required String? url, required String cnicOrId, required String photoType, required ValueChanged<String?> onChanged}) {
+    final s = _S.of(context);
+    if (widget.readOnly) {
+      if (url == null || url.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: EdgeInsets.only(bottom: s.s(10)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.35))),
+            SizedBox(height: s.s(4)),
+            GestureDetector(
+              onTap: () => _showCertPopup(url),
+              child: Text('View Certificate', style: TextStyle(fontSize: s.f(13.5), color: kPurple, decoration: TextDecoration.underline)),
+            ),
+          ],
+        ),
+      );
+    }
+    return Padding(
+      padding: EdgeInsets.only(bottom: s.s(10)),
+      child: _EditablePhotoSlot(
+        label: label,
+        icon: Icons.description_outlined,
+        photoUrl: url,
+        cnicOrId: cnicOrId,
+        photoType: photoType,
+        onChanged: onChanged,
+      ),
+    );
+  }
+
+  // Same dark-overlay, tap-outside-to-close popup pattern used across the
+  // rest of this feature — in-app, not an external browser hand-off.
+  void _showCertPopup(String url) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.85),
+      builder: (dialogCtx) => GestureDetector(
+        onTap: () => Navigator.pop(dialogCtx),
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Stack(children: [
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: GestureDetector(
+                  onTap: () {},
+                  child: InteractiveViewer(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.network(
+                        url,
+                        fit: BoxFit.contain,
+                        loadingBuilder: (context, child, progress) => progress == null
+                            ? child
+                            : const Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator(color: Colors.white)),
+                        errorBuilder: (context, error, stack) => const Padding(
+                          padding: EdgeInsets.all(40),
+                          child: Text('Could not load certificate', style: TextStyle(color: Colors.white)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 20, right: 20,
+              child: GestureDetector(
+                onTap: () => Navigator.pop(dialogCtx),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
+                  child: const Text('✕ Close', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _field(String label, TextEditingController ctrl, {TextInputType? type, List<TextInputFormatter>? formatters}) {
     if (widget.readOnly) return _viewValue(label, ctrl.text);
     final s = _S.of(context);
     return Padding(
@@ -812,11 +1059,23 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           TextField(
             controller: ctrl,
             keyboardType: type,
+            inputFormatters: formatters,
             style: TextStyle(color: Colors.white, fontSize: s.f(13.5)),
             decoration: _inputDeco(),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _phoneField(String label, TextEditingController ctrl, CountryCode country, ValueChanged<CountryCode> onCountryChanged, {bool required = true}) {
+    if (widget.readOnly) {
+      final display = ctrl.text.trim().isEmpty ? '' : '${country.dialCode} ${ctrl.text.trim()}';
+      return _viewValue(label, display);
+    }
+    return Padding(
+      padding: EdgeInsets.only(bottom: _S.of(context).s(10)),
+      child: PhoneField(label: label, required: required, controller: ctrl, selectedCountry: country, onCountryChanged: onCountryChanged),
     );
   }
 
@@ -849,7 +1108,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     );
   }
 
-  Widget _drop(String label, String value, List<String> options, ValueChanged<String> onChanged) {
+  Widget _drop(String label, String value, List<String> options, ValueChanged<String> onChanged, {String? infoText}) {
     if (widget.readOnly) return _viewValue(label, value);
     final hasValue = value.isNotEmpty && options.contains(value);
     final s = _S.of(context);
@@ -858,7 +1117,26 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+          Row(children: [
+            Text(label, style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+            if (infoText != null) ...[
+              SizedBox(width: s.s(5)),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => showDialog(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: const Color(0xFF1E1A33),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    title: Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white)),
+                    content: Text(infoText, style: TextStyle(fontSize: 13.5, color: Colors.white.withOpacity(0.7), height: 1.5)),
+                    actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Got it'))],
+                  ),
+                ),
+                child: Icon(Icons.info_outline_rounded, color: Colors.white.withOpacity(0.4), size: s.d(15)),
+              ),
+            ],
+          ]),
           SizedBox(height: s.s(5)),
           Container(
             padding: EdgeInsets.symmetric(horizontal: s.s(12)),
@@ -1122,15 +1400,17 @@ class _AdminEditCitySheetState extends State<_AdminEditCitySheet> {
 class _EditablePhotoSlot extends StatefulWidget {
   final String label;
   final IconData icon;
-  final String? base64Data;
   final String? photoUrl;
+  final String cnicOrId;
+  final String photoType;
   final ValueChanged<String?> onChanged;
   final bool crop;
-  const _EditablePhotoSlot({required this.label, required this.icon, this.base64Data, this.photoUrl, required this.onChanged, this.crop = false});
+  const _EditablePhotoSlot({required this.label, required this.icon, this.photoUrl, required this.cnicOrId, required this.photoType, required this.onChanged, this.crop = false});
   @override State<_EditablePhotoSlot> createState() => _EditablePhotoSlotState();
 }
 class _EditablePhotoSlotState extends State<_EditablePhotoSlot> {
   final _picker = ImagePicker();
+  bool _uploading = false;
 
   Future<void> _pick(ImageSource source) async {
     final picked = await _picker.pickImage(source: source, imageQuality: 75, maxWidth: 600);
@@ -1141,7 +1421,20 @@ class _EditablePhotoSlotState extends State<_EditablePhotoSlot> {
       if (cropped == null) return;
       bytes = cropped;
     }
-    widget.onChanged(base64Encode(bytes));
+    setState(() => _uploading = true);
+    try {
+      // Uploaded straight to Cloudflare R2 — never stored as base64 in
+      // the database, matching how every other photo in this app
+      // (registration, self-service edits) already works.
+      final url = await SupabaseService.instance.uploadUserPhoto(bytes, widget.cnicOrId, widget.photoType);
+      widget.onChanged(url);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to upload photo: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
   }
 
   void _showOptions() {
@@ -1158,7 +1451,7 @@ class _EditablePhotoSlotState extends State<_EditablePhotoSlot> {
         ListTile(leading: const Icon(Icons.photo_library_rounded, color: kPurple),
           title: const Text('Choose from Gallery', style: TextStyle(color: Colors.white)),
           onTap: () { Navigator.pop(context); _pick(ImageSource.gallery); }),
-        if (widget.base64Data != null)
+        if (widget.photoUrl != null)
           ListTile(leading: const Icon(Icons.delete_outline_rounded, color: kRose),
             title: const Text('Remove Photo', style: TextStyle(color: kRose)),
             onTap: () { Navigator.pop(context); widget.onChanged(null); }),
@@ -1168,9 +1461,8 @@ class _EditablePhotoSlotState extends State<_EditablePhotoSlot> {
   }
 
   void _showFull() {
-    final hasB64 = widget.base64Data != null && widget.base64Data!.isNotEmpty;
     final hasUrl = widget.photoUrl != null && widget.photoUrl!.isNotEmpty;
-    if (!hasB64 && !hasUrl) return;
+    if (!hasUrl) return;
     final sf = _S.of(context);
     showDialog(context: context, builder: (_) => Dialog(
       backgroundColor: Colors.black,
@@ -1187,13 +1479,9 @@ class _EditablePhotoSlotState extends State<_EditablePhotoSlot> {
           child: ClipRRect(
             borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
             child: InteractiveViewer(
-              child: hasB64
-                ? Image.memory(base64Decode(widget.base64Data!), fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const Padding(padding: EdgeInsets.all(20),
-                      child: Text('Could not load image', style: TextStyle(color: Colors.white))))
-                : Image.network(widget.photoUrl!, fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const Padding(padding: EdgeInsets.all(20),
-                      child: Text('Could not load image', style: TextStyle(color: Colors.white)))),
+              child: Image.network(widget.photoUrl!, fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Padding(padding: EdgeInsets.all(20),
+                  child: Text('Could not load image', style: TextStyle(color: Colors.white)))),
             ),
           ),
         ),
@@ -1203,11 +1491,9 @@ class _EditablePhotoSlotState extends State<_EditablePhotoSlot> {
 
   @override
   Widget build(BuildContext context) {
-    final hasB64 = widget.base64Data != null && widget.base64Data!.isNotEmpty;
-    final hasUrl = widget.photoUrl != null && widget.photoUrl!.isNotEmpty;
-    final hasImage = hasB64 || hasUrl;
+    final hasImage = widget.photoUrl != null && widget.photoUrl!.isNotEmpty;
     return GestureDetector(
-      onTap: _showOptions,
+      onTap: _uploading ? null : _showOptions,
       onLongPress: hasImage ? _showFull : null,
       child: Builder(builder: (context) {
         final s = _S.of(context);
@@ -1218,24 +1504,23 @@ class _EditablePhotoSlotState extends State<_EditablePhotoSlot> {
             borderRadius: BorderRadius.circular(s.s(12)),
             border: Border.all(color: hasImage ? kPurple.withOpacity(0.5) : Colors.white.withOpacity(0.1), width: hasImage ? 1.5 : 1),
           ),
-          child: hasImage
-            ? ClipRRect(borderRadius: BorderRadius.circular(s.s(11)),
-              child: Stack(fit: StackFit.expand, children: [
-                hasB64
-                  ? Image.memory(base64Decode(widget.base64Data!), fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _placeholder())
-                  : Image.network(widget.photoUrl!, fit: BoxFit.cover,
+          child: _uploading
+            ? const Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: kPurple, strokeWidth: 2)))
+            : hasImage
+              ? ClipRRect(borderRadius: BorderRadius.circular(s.s(11)),
+                child: Stack(fit: StackFit.expand, children: [
+                  Image.network(widget.photoUrl!, fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => _placeholder()),
-                Positioned(bottom: 0, left: 0, right: 0,
-                  child: Container(padding: EdgeInsets.symmetric(vertical: s.s(4)), color: Colors.black.withOpacity(0.5),
-                    child: Text(widget.label, textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: s.f(9), color: Colors.white, fontWeight: FontWeight.w600)))),
-                Positioned(top: s.s(4), right: s.s(4),
-                  child: Container(padding: EdgeInsets.all(s.s(3)),
-                    decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(s.s(6))),
-                    child: Icon(Icons.edit_rounded, size: s.d(12), color: Colors.white))),
-              ]))
-          : _placeholder(),
+                  Positioned(bottom: 0, left: 0, right: 0,
+                    child: Container(padding: EdgeInsets.symmetric(vertical: s.s(4)), color: Colors.black.withOpacity(0.5),
+                      child: Text(widget.label, textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: s.f(9), color: Colors.white, fontWeight: FontWeight.w600)))),
+                  Positioned(top: s.s(4), right: s.s(4),
+                    child: Container(padding: EdgeInsets.all(s.s(3)),
+                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(s.s(6))),
+                      child: Icon(Icons.edit_rounded, size: s.d(12), color: Colors.white))),
+                ]))
+            : _placeholder(),
         );
       }),
     );
@@ -1252,25 +1537,21 @@ class _EditablePhotoSlotState extends State<_EditablePhotoSlot> {
   });
 }
 
-// ── Admin Photo Slot — shows actual base64 image from applicant ──────────────
+// ── Admin Photo Slot — read-only display of a proposal's photo ───────────────
 class _AdminPhotoSlot extends StatelessWidget {
   final String label;
   final IconData icon;
-  final String? base64Data;
   final String? photoUrl;
 
   const _AdminPhotoSlot({
     required this.label,
     required this.icon,
-    this.base64Data,
     this.photoUrl,
   });
 
   @override
   Widget build(BuildContext context) {
-    final hasBase64 = base64Data != null && base64Data!.isNotEmpty;
-    final hasUrl = photoUrl != null && photoUrl!.isNotEmpty;
-    final hasImage = hasBase64 || hasUrl;
+    final hasImage = photoUrl != null && photoUrl!.isNotEmpty;
     return GestureDetector(
       onTap: hasImage ? () => _showFullImage(context) : null,
       child: Builder(builder: (context) {
@@ -1289,17 +1570,11 @@ class _AdminPhotoSlot extends StatelessWidget {
               ? ClipRRect(
                   borderRadius: BorderRadius.circular(s.s(11)),
                 child: Stack(fit: StackFit.expand, children: [
-                  hasBase64
-                    ? Image.memory(
-                        Uri.parse('data:image/jpeg;base64,$base64Data').data!.contentAsBytes(),
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => _placeholder(),
-                      )
-                    : Image.network(
-                        photoUrl!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => _placeholder(),
-                      ),
+                  Image.network(
+                    photoUrl!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _placeholder(),
+                  ),
                   Positioned(bottom: 0, left: 0, right: 0,
                     child: Container(
                       padding: EdgeInsets.symmetric(vertical: s.s(4)),
@@ -1328,7 +1603,6 @@ class _AdminPhotoSlot extends StatelessWidget {
   }
 
   void _showFullImage(BuildContext context) {
-    final hasBase64 = base64Data != null && base64Data!.isNotEmpty;
     final s = _S.of(context);
     showDialog(
       context: context,
@@ -1349,23 +1623,14 @@ class _AdminPhotoSlot extends StatelessWidget {
             child: ClipRRect(
               borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
               child: InteractiveViewer(
-                child: hasBase64
-                  ? Image.memory(
-                      Uri.parse('data:image/jpeg;base64,$base64Data').data!.contentAsBytes(),
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const Padding(
-                        padding: EdgeInsets.all(20),
-                        child: Text('Could not load image', style: TextStyle(color: Colors.white)),
-                      ),
-                    )
-                  : Image.network(
-                      photoUrl!,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const Padding(
-                        padding: EdgeInsets.all(20),
-                        child: Text('Could not load image', style: TextStyle(color: Colors.white)),
-                      ),
-                    ),
+                child: Image.network(
+                  photoUrl!,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text('Could not load image', style: TextStyle(color: Colors.white)),
+                  ),
+                ),
               ),
             ),
           ),

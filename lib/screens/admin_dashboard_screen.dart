@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -7,14 +6,20 @@ import 'package:flutter/services.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../models/admin_models.dart';
+import '../widgets/notification_bell_widget.dart';
+import 'admin_notification_screen.dart';
 import 'admin_users_screen.dart';
 import 'admin_proposals_screen.dart';
 import 'admin_trash_screen.dart';
 import 'admin_pricing_screen.dart';
-import 'admin_locations_screen.dart';
 import 'admin_affiliate_screen.dart';
 import 'admin_add_user_screen.dart';
 import 'admin_whatsapp_import_screen.dart';
+import 'admin_login_screen.dart';
+import 'admin_edit_requests_screen.dart';
+import 'admin_testimonials_screen.dart';
+import 'admin_accounts_screen.dart';
+import 'admin_usage_stats_screen.dart';
 
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
@@ -43,12 +48,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   int _tab = 0;
   VoidCallback? _addAffiliate;
   VoidCallback? _refreshAffiliate;
+  VoidCallback? _refreshTestimonials;
   bool _refreshing = false;
   int _affiliateTrashCount = 0;
-  int _affiliateTotalCount = 0;
   int _pendingCount = 0;
+  int _unreadNotifCount = 0;
   int _refreshKey = 0;
-  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
   late AnimationController _spinCtrl;
 
   @override
@@ -60,7 +65,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     widget.adminService.loadData().then((_) {
       widget.adminService.checkAndExpireSubscriptions();
     });
-    _loadAffiliateTrashCount();
+    _refreshUnreadNotifCount();
+  }
+
+  Future<void> _refreshUnreadNotifCount() async {
+    final count = await NotificationBellWidget.unreadCount();
+    if (mounted) setState(() => _unreadNotifCount = count);
   }
 
   @override
@@ -81,7 +91,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       final totalRes = await db.client.from('affiliates').select('id').or('deleted.is.null,deleted.eq.false');
       if (mounted) setState(() {
         _affiliateTrashCount = (trashRes as List).length;
-        _affiliateTotalCount = (totalRes as List).length;
       });
     } catch (_) {}
   }
@@ -206,10 +215,27 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           ),
           const SizedBox(height: 10),
           _SettingOption(
-            icon: Icons.visibility_rounded,
+            icon: Icons.admin_panel_settings_rounded,
             color: kAmber,
-            label: 'Admin View',
-            onTap: () { Navigator.pop(ctx); _showAdminViewDialog(ctx); },
+            label: 'Create Admin',
+            onTap: () {
+              Navigator.pop(ctx);
+              Navigator.push(context, MaterialPageRoute(
+                builder: (_) => AdminAccountsScreen(svc: widget.adminService),
+              ));
+            },
+          ),
+          const SizedBox(height: 10),
+          _SettingOption(
+            icon: Icons.monitor_heart_rounded,
+            color: const Color(0xFF25D366),
+            label: 'Usage & Monitoring',
+            onTap: () {
+              Navigator.pop(ctx);
+              Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const AdminUsageStatsScreen(),
+              ));
+            },
           ),
         ]),
         actions: [
@@ -241,11 +267,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             const Text('Change PIN', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
           ]),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
-            _pinField(oldPinCtrl, 'Current PIN'),
+            _pinField(oldPinCtrl, 'Current PIN', onChanged: (_) => setDlg(() {})),
             const SizedBox(height: 12),
-            _pinField(newPinCtrl, 'New PIN'),
+            _pinField(newPinCtrl, 'New PIN', onChanged: (_) => setDlg(() {})),
             const SizedBox(height: 12),
-            _pinField(confirmCtrl, 'Confirm New PIN'),
+            _pinField(confirmCtrl, 'Confirm New PIN', onChanged: (_) => setDlg(() {})),
             if (error != null) ...[
               const SizedBox(height: 8),
               Text(error!, style: const TextStyle(fontSize: 12, color: kRose)),
@@ -256,8 +282,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               onPressed: () => Navigator.pop(dlgCtx),
               child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.4))),
             ),
-            GestureDetector(
-              onTap: saving ? null : () async {
+            Builder(builder: (context) {
+              // Nothing to actually save until all three fields have a
+              // full 6-digit PIN entered — button stays muted until then,
+              // matching the same "only enabled when there's something to
+              // save" behavior used elsewhere in the app.
+              final hasInput = oldPinCtrl.text.length == 6 && newPinCtrl.text.length == 6 && confirmCtrl.text.length == 6;
+              final enabled = hasInput && !saving;
+              return GestureDetector(
+              onTap: !enabled ? null : () async {
                 final op = oldPinCtrl.text.trim();
                 final np = newPinCtrl.text.trim();
                 final cp = confirmCtrl.text.trim();
@@ -278,71 +311,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     UserAttributes(password: np),
                   );
                   if (dlgCtx.mounted) Navigator.pop(dlgCtx);
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    content: const Text('PIN changed successfully!'),
-                    backgroundColor: kGreen,
-                    behavior: SnackBarBehavior.floating,
-                    margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ));
                 } catch (e) {
                   setDlg(() { saving = false; error = 'Current PIN is incorrect'; });
                 }
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(color: kPurple, borderRadius: BorderRadius.circular(8)),
+                decoration: BoxDecoration(color: enabled ? kPurple : kPurple.withOpacity(0.35), borderRadius: BorderRadius.circular(8)),
                 child: saving
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : const Text('Save', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                  : Text('Save', style: TextStyle(color: Colors.white.withOpacity(enabled ? 1 : 0.6), fontWeight: FontWeight.w700, fontSize: 13)),
               ),
-            ),
+              );
+            }),
           ],
         ),
       ),
     );
   }
 
-  Future<void> _showAdminViewDialog(BuildContext ctx) async {
-    final cnicCtrl = TextEditingController();
-    final passCtrl = TextEditingController();
-
-    await SupabaseService.instance.fetchAppSettings();
-    final isFirstSetup = (SupabaseService.instance.cachedSettings['admin_view_cnic'] ?? '').isEmpty;
-
-    if (!ctx.mounted) return;
-
-    // Instantiate ONCE before showing — prevents builder from recreating it on every setState
-    final dialog = _AdminViewDialog(
-      isFirstSetup: isFirstSetup,
-      cnicCtrl: cnicCtrl,
-      passCtrl: passCtrl,
-      onSuccess: (cnic, isNew) {
-        Navigator.of(ctx).pop();
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(isNew
-            ? 'Admin credentials created successfully!'
-            : isFirstSetup
-              ? 'Admin credentials saved!'
-              : 'Admin credentials updated successfully.'),
-          backgroundColor: kAmber,
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ));
-      },
-    );
-
-    showDialog(
-      context: ctx,
-      builder: (_) => dialog,
-    );
-  }
-
   void _showChangeWaDialog(BuildContext ctx) {
-    final waCtrl = TextEditingController(
-      text: SupabaseService.instance.cachedSettings['whatsapp_number'] ?? '923000000000',
-    );
+    final currentSaved = SupabaseService.instance.cachedSettings['whatsapp_number'] ?? '923000000000';
+    final waCtrl = TextEditingController(text: currentSaved);
     bool saving = false;
     String? error;
     String? success;
@@ -362,6 +352,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             TextField(
               controller: waCtrl,
               keyboardType: TextInputType.phone,
+              onChanged: (_) => setDlg(() {}),
               style: const TextStyle(color: Colors.white, fontSize: 14),
               decoration: InputDecoration(
                 hintText: '923001234567',
@@ -390,8 +381,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               onPressed: () => Navigator.pop(dlgCtx),
               child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.4))),
             ),
-            GestureDetector(
-              onTap: saving ? null : () async {
+            Builder(builder: (context) {
+              // Nothing to actually save unless the number is a valid
+              // length AND actually different from what's already saved —
+              // same "only enabled when there's something to save"
+              // behavior as the Change PIN dialog.
+              final digits = waCtrl.text.trim().replaceAll(RegExp(r'[^0-9]'), '');
+              final hasChange = digits.length >= 10 && digits != currentSaved;
+              final enabled = hasChange && !saving;
+              return GestureDetector(
+              onTap: !enabled ? null : () async {
                 final num = waCtrl.text.trim().replaceAll(RegExp(r'[^0-9]'), '');
                 if (num.length < 10) { setDlg(() => error = 'Enter a valid number'); return; }
                 setDlg(() { saving = true; error = null; success = null; });
@@ -400,25 +399,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     .upsert({'key': 'whatsapp_number', 'value': num});
                   await SupabaseService.instance.fetchAppSettings();
                   if (dlgCtx.mounted) Navigator.pop(dlgCtx);
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    content: const Text('WhatsApp number updated!'),
-                    backgroundColor: kGreen,
-                    behavior: SnackBarBehavior.floating,
-                    margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ));
                 } catch (e) {
                   setDlg(() { saving = false; error = 'Failed to save'; });
                 }
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(color: const Color(0xFF25D366), borderRadius: BorderRadius.circular(8)),
+                decoration: BoxDecoration(color: enabled ? const Color(0xFF25D366) : const Color(0xFF25D366).withOpacity(0.35), borderRadius: BorderRadius.circular(8)),
                 child: saving
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : const Text('Save', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                  : Text('Save', style: TextStyle(color: Colors.white.withOpacity(enabled ? 1 : 0.6), fontWeight: FontWeight.w700, fontSize: 13)),
               ),
-            ),
+              );
+            }),
           ],
         ),
       ),
@@ -426,13 +419,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
 
-  Widget _pinField(TextEditingController ctrl, String label) {
+  Widget _pinField(TextEditingController ctrl, String label, {ValueChanged<String>? onChanged}) {
     return TextField(
       controller: ctrl,
       obscureText: true,
       keyboardType: TextInputType.number,
       maxLength: 6,
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      onChanged: onChanged,
       style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 8),
       decoration: InputDecoration(
         labelText: label,
@@ -464,12 +458,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               child: IndexedStack(
                 index: _tab,
                 children: [
-                  _DashboardHome(svc: svc, refreshKey: _refreshKey, selectedMonth: _selectedMonth, onMonthChanged: (m) => setState(() { _selectedMonth = m; _refreshKey++; }), affiliateTrashCount: _affiliateTrashCount, affiliateTotalCount: _affiliateTotalCount),
+                  _DashboardHome(svc: svc, refreshKey: _refreshKey,
+                    affiliateTrashCount: _affiliateTrashCount, affiliateTotalCount: svc.affiliateTotalCount),
                   AdminProposalsScreen(svc: svc),
                   AdminUsersScreen(svc: svc),
                   const AdminPricingScreen(),
                   AdminAffiliateScreen(onRegisterCallback: (cb) => _addAffiliate = cb, onRefreshCallback: (cb) => _refreshAffiliate = cb, onAffiliateDeleted: _loadAffiliateTrashCount),
-                  const AdminLocationsScreen(),
+                  AdminTestimonialsScreen(onRefreshCallback: (cb) => _refreshTestimonials = cb),
                 ],
               ),
             ),
@@ -508,6 +503,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 ),
               ),
             ),
+            SizedBox(width: s.s(8)),
+          ],
+          if (_tab == 2) ...[
+            _EditRequestsHeaderBadge(onReturn: _doRefresh),
             SizedBox(width: s.s(8)),
           ],
           if (_tab == 1) ...[
@@ -567,6 +566,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ),
             SizedBox(width: s.s(8)),
           ],
+          if (_tab == 5) ...[
+            GestureDetector(
+              onTap: () => _refreshTestimonials?.call(),
+              child: Container(
+                width: s.d(36), height: s.d(36),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
+            ),
+            SizedBox(width: s.s(8)),
+          ],
           if (_tab == 0) ...[
             GestureDetector(
               onTap: () => _showSettingsDialog(context, svc),
@@ -574,6 +583,43 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 child: Icon(Icons.settings_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
             ),
             SizedBox(width: s.s(8)),
+          ],
+          // ✨ Notification Bell Widget (dashboard tab only)
+          if (_tab == 0) ...[GestureDetector(
+            onTap: () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminNotificationScreen()));
+              _refreshUnreadNotifCount();
+            },
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: s.d(36),
+                  height: s.d(36),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(s.s(10)),
+                  ),
+                  child: Icon(Icons.notifications_outlined, color: Colors.white.withOpacity(0.5), size: s.d(18)),
+                ),
+                if (_unreadNotifCount > 0)
+                  Positioned(
+                    right: -4, top: -4,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: const BoxDecoration(color: kRose, shape: BoxShape.circle),
+                      constraints: BoxConstraints(minWidth: s.d(16), minHeight: s.d(16)),
+                      child: Text(
+                        _unreadNotifCount > 9 ? '9+' : '$_unreadNotifCount',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white, fontSize: s.f(9), fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          SizedBox(width: s.s(8)),
           ],
           GestureDetector(
             onTap: () {
@@ -587,7 +633,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   actions: [
                     TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.4)))),
                     GestureDetector(
-                      onTap: () { Navigator.pop(context); svc.logout(); Navigator.pop(context); },
+                      onTap: () {
+                        Navigator.pop(context);
+                        svc.logout();
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(builder: (_) => AdminLoginScreen(adminService: svc)),
+                        );
+                      },
                       child: Container(
                         padding: EdgeInsets.symmetric(horizontal: s.s(16), vertical: s.s(8)),
                         decoration: BoxDecoration(color: kRose, borderRadius: BorderRadius.circular(s.s(8))),
@@ -616,7 +669,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       (Icons.people_rounded, 'Users'),
       (Icons.attach_money_rounded, 'Pricing'),
       (Icons.handshake_outlined, 'Affiliate'),
-      (Icons.location_on_rounded, 'Locations'),
+      (Icons.format_quote_rounded, 'Content'),
     ];
     final s = _S.of(context);
     return Container(
@@ -725,137 +778,135 @@ class _SettingOption extends StatelessWidget {
 class _DashboardHome extends StatelessWidget {
   final AdminService svc;
   final int refreshKey;
-  final DateTime selectedMonth;
-  final void Function(DateTime) onMonthChanged;
   final int affiliateTrashCount;
   final int affiliateTotalCount;
   const _DashboardHome({required this.svc, this.refreshKey = 0,
-    required this.selectedMonth, required this.onMonthChanged, this.affiliateTrashCount = 0, this.affiliateTotalCount = 0});
+    this.affiliateTrashCount = 0, this.affiliateTotalCount = 0});
 
-  double get _monthlyRevenue {
-    // Use the DB-backed monthlyRevenue which includes permanently deleted users' contributions
-    final now = DateTime.now();
-    if (selectedMonth.year == now.year && selectedMonth.month == now.month) {
-      return svc.monthlyRevenue;
-    }
-    // For past months, compute from live users only (deleted users' past months not tracked)
-    final monthEnd = DateTime(selectedMonth.year, selectedMonth.month + 1, 1);
-    return svc.users
-        .where((u) => u.subscriptionStart != null &&
-            !u.subscriptionStart!.isBefore(selectedMonth) &&
-            u.subscriptionStart!.isBefore(monthEnd))
-        .fold(0.0, (sum, u) => sum + u.totalSpending);
+  double get _monthlyRevenue => svc.monthlyRevenue;
+
+  static const _monthNames = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  void _confirmResetStats(BuildContext context, AdminService svc, _S s) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF16132A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(18))),
+        title: Text('Reset Stats?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: s.f(16))),
+        content: Text(
+          'This resets All Time Users, All Time Visitors, All-Time Revenue, and Monthly Revenue back to 0 on the dashboard.',
+          style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: s.f(13), height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: s.f(13))),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              HapticFeedback.heavyImpact();
+              try {
+                await svc.resetAllTimeStats();
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text('Reset failed: $e'),
+                    backgroundColor: kRose,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(12))),
+                  ));
+                }
+              }
+            },
+            child: Text('Reset', style: TextStyle(color: kRose, fontWeight: FontWeight.w700, fontSize: s.f(13))),
+          ),
+        ],
+      ),
+    );
   }
 
-  Future<void> _pickMonth(BuildContext context) async {
-    final now = DateTime.now();
-    DateTime? tempFrom = selectedMonth;
-    DateTime? tempTo;
+  /// A simple list of every completed month's frozen revenue — no picker,
+  /// no range to get wrong, just "here's what each past month made."
+  Future<void> _showRevenueHistory(BuildContext context) async {
+    final future = SupabaseService.instance.fetchMonthlyRevenueHistory();
 
     await showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => Dialog(
-          backgroundColor: const Color(0xFF1E1A33),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Filter Revenue by Date', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white)),
-                const SizedBox(height: 4),
-                Text('Select a date range to filter monthly revenue', style: TextStyle(fontSize: 11.5, color: Colors.white.withOpacity(0.5))),
-                const SizedBox(height: 12),
-                GestureDetector(
-                  onTap: () async {
-                    final d = await showDatePicker(
-                      context: ctx,
-                      initialDate: tempFrom ?? now,
-                      firstDate: DateTime(2024),
-                      lastDate: now,
-                      builder: (ctx, child) => Theme(
-                        data: ThemeData.dark().copyWith(
-                          colorScheme: const ColorScheme.dark(primary: kPurple, onPrimary: Colors.white, surface: Color(0xFF2A2545), onSurface: Colors.white),
-                        ),
-                        child: child!,
-                      ),
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFF1E1A33),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Revenue History', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white)),
+              const SizedBox(height: 4),
+              Text('Each month is locked in the moment it ends', style: TextStyle(fontSize: 11.5, color: Colors.white.withOpacity(0.5))),
+              const SizedBox(height: 14),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 360, minWidth: 260),
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: future,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState != ConnectionState.done) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 30),
+                        child: Center(child: CircularProgressIndicator(color: kPurple, strokeWidth: 2)),
+                      );
+                    }
+                    final rows = snapshot.data ?? [];
+                    if (rows.isEmpty) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 30),
+                        child: Center(child: Text('No completed months yet',
+                            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 13))),
+                      );
+                    }
+                    return ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: rows.length,
+                      separatorBuilder: (_, __) => Divider(height: 1, color: Colors.white.withOpacity(0.06)),
+                      itemBuilder: (_, i) {
+                        final r = rows[i];
+                        final y = r['year'] as int;
+                        final m = r['month'] as int;
+                        final revenue = (r['total_revenue'] as num?)?.toDouble() ?? 0;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(children: [
+                            Text('${_monthNames[m]} $y', style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600)),
+                            const Spacer(),
+                            Text('Rs. ${revenue.toInt()}', style: const TextStyle(color: kGreen, fontSize: 13.5, fontWeight: FontWeight.w800)),
+                          ]),
+                        );
+                      },
                     );
-                    if (d != null) setS(() { tempFrom = d; if (tempTo != null && tempTo!.isBefore(d)) tempTo = null; });
                   },
-                  child: _dateBtn('From', tempFrom),
                 ),
-                const SizedBox(height: 8),
-                GestureDetector(
-                  onTap: () async {
-                    final d = await showDatePicker(
-                      context: ctx,
-                      initialDate: tempTo ?? tempFrom ?? now,
-                      firstDate: tempFrom ?? DateTime(2024),
-                      lastDate: now,
-                      builder: (ctx, child) => Theme(
-                        data: ThemeData.dark().copyWith(
-                          colorScheme: const ColorScheme.dark(primary: kPurple, onPrimary: Colors.white, surface: Color(0xFF2A2545), onSurface: Colors.white),
-                        ),
-                        child: child!,
-                      ),
-                    );
-                    if (d != null) setS(() => tempTo = d);
-                  },
-                  child: _dateBtn('To', tempTo),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(ctx),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
+                    child: const Center(child: Text('Close', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 13))),
+                  ),
                 ),
-                const SizedBox(height: 12),
-                Row(children: [
-                  Expanded(child: GestureDetector(
-                    onTap: () {
-                      onMonthChanged(DateTime(now.year, now.month, 1));
-                      Navigator.pop(ctx);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
-                      child: const Center(child: Text('Reset', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 13))),
-                    ),
-                  )),
-                  const SizedBox(width: 10),
-                  Expanded(child: GestureDetector(
-                    onTap: () {
-                      if (tempFrom != null) onMonthChanged(DateTime(tempFrom!.year, tempFrom!.month, 1));
-                      Navigator.pop(ctx);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      decoration: BoxDecoration(color: kPurple, borderRadius: BorderRadius.circular(10)),
-                      child: const Center(child: Text('Apply', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13))),
-                    ),
-                  )),
-                ]),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
-
-  Widget _dateBtn(String label, DateTime? date) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-    decoration: BoxDecoration(
-      color: date != null ? kPurple.withOpacity(0.1) : Colors.white.withOpacity(0.06),
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: date != null ? kPurple.withOpacity(0.4) : Colors.white.withOpacity(0.1)),
-    ),
-    child: Row(children: [
-      Icon(Icons.calendar_today_rounded, size: 14, color: date != null ? kPurple : Colors.white38),
-      const SizedBox(width: 10),
-      Text(label, style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.w600)),
-      const Spacer(),
-      Text(date != null ? '${date.day}/${date.month}/${date.year}' : 'Select',
-          style: TextStyle(fontSize: 13, color: date != null ? Colors.white : Colors.white38, fontWeight: FontWeight.w700)),
-    ]),
-  );
 
   bool _hasFeaturedBoostToday(AdminUser u) {
     final now = DateTime.now();
@@ -870,8 +921,27 @@ class _DashboardHome extends StatelessWidget {
       padding: EdgeInsets.all(s.s(20)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('Overview', style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w700, color: Colors.white)),
-        SizedBox(height: s.s(4)),
-        Text('All-time performance snapshot', style: TextStyle(fontSize: s.f(12), color: Colors.white.withOpacity(0.4))),
+        SizedBox(height: s.s(1)),
+        Row(children: [
+          Text('All-time performance snapshot', style: TextStyle(fontSize: s.f(12), color: Colors.white.withOpacity(0.4))),
+          const Spacer(),
+          GestureDetector(
+            onTap: () => _confirmResetStats(context, svc, s),
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: s.s(9), vertical: s.s(5)),
+              decoration: BoxDecoration(
+                color: kPurple.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(s.s(8)),
+                border: Border.all(color: kPurple.withOpacity(0.25)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.restart_alt_rounded, size: s.d(12), color: kPurple),
+                SizedBox(width: s.s(5)),
+                Text('Reset Stats', style: TextStyle(fontSize: s.f(11), fontWeight: FontWeight.w700, color: kPurple)),
+              ]),
+            ),
+          ),
+        ]),
         SizedBox(height: s.s(16)),
         Row(children: [
           Expanded(child: _BigStatCard(
@@ -908,7 +978,7 @@ class _DashboardHome extends StatelessWidget {
           SizedBox(width: s.s(12)),
           Expanded(
             child: GestureDetector(
-              onTap: () => _pickMonth(context),
+              onTap: () => _showRevenueHistory(context),
               child: Container(
                 padding: EdgeInsets.all(s.s(16)),
                 decoration: BoxDecoration(
@@ -930,7 +1000,7 @@ class _DashboardHome extends StatelessWidget {
                     const Spacer(),
                     Transform.translate(
                       offset: const Offset(0, -10),
-                      child: Icon(Icons.calendar_today_rounded, size: s.d(14), color: kPurple),
+                      child: Icon(Icons.history_rounded, size: s.d(14), color: kPurple),
                     ),
                   ]),
                   SizedBox(height: s.s(12)),
@@ -1153,6 +1223,10 @@ class _CityBreakdownHeaderState extends State<_CityBreakdownHeader> {
         String country = u.country!;
         if (country.toLowerCase() == 'united arab emirates' || country.toLowerCase() == 'uae') {
           country = 'UAE';
+        } else if (country.toLowerCase() == 'united kingdom' || country.toLowerCase() == 'uk') {
+          country = 'UK';
+        } else if (country.toLowerCase() == 'united states' || country.toLowerCase() == 'united states of america' || country.toLowerCase() == 'usa') {
+          country = 'USA';
         }
         overseasMap[country] = (overseasMap[country] ?? 0) + 1;
       } else {
@@ -1289,206 +1363,88 @@ class _ToggleBtn extends StatelessWidget {
   }
 }
 
-// ── CNIC auto-formatter for admin view dialog ─────────────────────────────────
-class _CnicDashFormatter extends TextInputFormatter {
+
+// ── Edit Requests header badge ──────────────────────────────────────────────
+// Sits in the dashboard header next to refresh. Shows a count of profiles
+// that still have at least one field neither ticked (kept) nor crossed
+// (reverted) — reuses the same EditRequest.build() walk-algorithm as the
+// review screen itself, so the two always agree. Self-manages its own
+// reload after returning from that screen.
+class _EditRequestsHeaderBadge extends StatefulWidget {
+  final VoidCallback? onReturn;
+  const _EditRequestsHeaderBadge({this.onReturn});
+  @override State<_EditRequestsHeaderBadge> createState() => _EditRequestsHeaderBadgeState();
+}
+
+class _EditRequestsHeaderBadgeState extends State<_EditRequestsHeaderBadge> {
+  int _pendingCount = 0;
+
   @override
-  TextEditingValue formatEditUpdate(TextEditingValue old, TextEditingValue val) {
-    final digits = val.text.replaceAll('-', '');
-    if (digits.length > 13) return old;
-    final buf = StringBuffer();
-    for (int i = 0; i < digits.length; i++) {
-      if (i == 5 || i == 12) buf.write('-');
-      buf.write(digits[i]);
-    }
-    final s = buf.toString();
-    return val.copyWith(text: s, selection: TextSelection.collapsed(offset: s.length));
+  void initState() {
+    super.initState();
+    _loadCount();
   }
-}
 
-// ── Admin View Dialog ─────────────────────────────────────────────────────────
-class _AdminViewDialog extends StatefulWidget {
-  final bool isFirstSetup;
-  final TextEditingController cnicCtrl;
-  final TextEditingController passCtrl;
-  final void Function(String cnic, bool isNew) onSuccess;
-
-  _AdminViewDialog({
-    required this.isFirstSetup,
-    required this.cnicCtrl,
-    required this.passCtrl,
-    required this.onSuccess,
-  });
-
-  @override
-  State<_AdminViewDialog> createState() => _AdminViewDialogState();
-}
-
-class _AdminViewDialogState extends State<_AdminViewDialog> {
-  bool _saving      = false;
-  bool _passObscure = true;
-  bool _isCreateNew = false; // false = update existing, true = create new
-  int  _cnicDigits  = 0;
-  String? _error;
-
-  Future<void> _submit() async {
-    final cnic = widget.cnicCtrl.text.trim();
-    final pass = widget.passCtrl.text.trim();
-
-    if (cnic.replaceAll('-', '').length != 13) {
-      setState(() => _error = 'Enter complete CNIC (13 digits)');
-      return;
-    }
-    if (pass.length < 6) {
-      setState(() => _error = 'Password must be at least 6 characters');
-      return;
-    }
-
-    setState(() { _saving = true; _error = null; });
-
+  Future<void> _loadCount() async {
     try {
-      final client = SupabaseService.instance.client;
+      final data = await Supabase.instance.client
+          .from('profile_edit_requests')
+          .select('*, proposals(name, city, cnic, proposal_number)')
+          .order('submitted_at', ascending: true)
+          .limit(1000);
 
-      if (_isCreateNew) {
-        // Load existing credentials list and append new one
-        final existing = SupabaseService.instance.cachedSettings['admin_view_credentials'] ?? '[]';
-        List<dynamic> list = [];
-        try { list = List<dynamic>.from(jsonDecode(existing)); } catch (_) {}
-        // Check for duplicate CNIC
-        if (list.any((e) => e['cnic'] == cnic)) {
-          setState(() { _saving = false; _error = 'This CNIC already has credentials'; });
-          return;
-        }
-        list.add({'cnic': cnic, 'password': pass});
-        await client.rpc('upsert_app_setting', params: {'p_key': 'admin_view_credentials', 'p_value': jsonEncode(list)});
-      } else {
-        // Update the primary credential
-        await client.rpc('upsert_app_setting', params: {'p_key': 'admin_view_cnic',     'p_value': cnic});
-        await client.rpc('upsert_app_setting', params: {'p_key': 'admin_view_password', 'p_value': pass});
+      final Map<String, List<Map<String, dynamic>>> byProposal = {};
+      final Map<String, Map<String, dynamic>> metaByProposal = {};
+      for (final row in data as List) {
+        final r = row as Map<String, dynamic>;
+        final pid = r['proposal_id'] as String;
+        byProposal.putIfAbsent(pid, () => []).add(r);
+        metaByProposal[pid] = (r['proposals'] as Map<String, dynamic>?) ?? {};
       }
-      await SupabaseService.instance.fetchAppSettings();
 
-      widget.onSuccess(cnic, _isCreateNew);
-    } catch (e) {
-      setState(() { _saving = false; _error = 'Error: $e'; });
-    }
+      final count = byProposal.entries
+          .map((entry) => EditRequest.build(
+                proposalId: entry.key,
+                rows: entry.value,
+                proposalMeta: metaByProposal[entry.key] ?? {},
+              ))
+          .where((req) => req.hasPending)
+          .length;
+
+      if (mounted) setState(() => _pendingCount = count);
+    } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: const Color(0xFF16132A),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: Row(children: [
-        Icon(Icons.visibility_rounded, color: kAmber, size: 20),
-        const SizedBox(width: 8),
-        Text(
-          widget.isFirstSetup ? 'Set Admin Credentials' : (_isCreateNew ? 'Create New Credential' : 'Update Credentials'),
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16),
+    final s = _S.of(context);
+    return GestureDetector(
+      onTap: () async {
+        await Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const AdminEditRequestsScreen()));
+        _loadCount();
+        widget.onReturn?.call();
+      },
+      child: Stack(clipBehavior: Clip.none, children: [
+        Container(
+          width: s.d(36), height: s.d(36),
+          decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+          child: Icon(Icons.edit_note_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18)),
         ),
-      ]),
-      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Toggle: Update existing vs Create new
-        if (!widget.isFirstSetup) ...[
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white.withOpacity(0.08)),
-            ),
-            child: Row(children: [
-              Icon(_isCreateNew ? Icons.person_add_rounded : Icons.edit_rounded,
-                color: _isCreateNew ? kGreen : kAmber, size: 16),
-              const SizedBox(width: 8),
-              Expanded(child: Text(
-                _isCreateNew ? 'Create New Credential' : 'Update Existing',
-                style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 13, fontWeight: FontWeight.w600),
-              )),
-              Switch(
-                value: _isCreateNew,
-                onChanged: (v) => setState(() { _isCreateNew = v; _error = null; widget.cnicCtrl.clear(); widget.passCtrl.clear(); _cnicDigits = 0; }),
-                activeColor: kGreen,
-                inactiveThumbColor: kAmber,
-                inactiveTrackColor: kAmber.withOpacity(0.3),
+        if (_pendingCount > 0)
+          Positioned(
+            right: -4, top: -4,
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: s.s(5), vertical: s.s(1)),
+              decoration: BoxDecoration(
+                color: kRose, borderRadius: BorderRadius.circular(s.s(10)),
+                border: Border.all(color: const Color(0xFF0F0D1E), width: 1.5),
               ),
-            ]),
-          ),
-          const SizedBox(height: 12),
-        ],
-        // CNIC field
-        Stack(children: [
-          TextField(
-            controller: widget.cnicCtrl,
-            keyboardType: TextInputType.number,
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[\d-]')),
-              _CnicDashFormatter(),
-            ],
-            style: const TextStyle(color: Colors.white, fontSize: 14),
-            onChanged: (v) => setState(() { _cnicDigits = v.replaceAll('-', '').length; _error = null; }),
-            decoration: InputDecoration(
-              hintText: '35202-1234567-1',
-              hintStyle: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 13),
-              filled: true, fillColor: Colors.white.withOpacity(0.06),
-              contentPadding: const EdgeInsets.fromLTRB(14, 12, 48, 12),
-              prefixIcon: Icon(Icons.credit_card_rounded, color: Colors.white.withOpacity(0.4), size: 18),
-              border:        OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: kAmber.withOpacity(0.6))),
+              child: Text('$_pendingCount',
+                style: TextStyle(color: Colors.white, fontSize: s.f(9), fontWeight: FontWeight.w800)),
             ),
           ),
-          Positioned(right: 10, top: 0, bottom: 0,
-            child: Center(child: _cnicDigits == 0
-              ? const SizedBox.shrink()
-              : _cnicDigits == 13
-                ? Icon(Icons.check_circle_rounded, size: 16, color: kGreen)
-                : Text('$_cnicDigits/13', style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4))))),
-        ]),
-        const SizedBox(height: 12),
-        // Password field
-        TextField(
-          controller: widget.passCtrl,
-          obscureText: _passObscure,
-          style: const TextStyle(color: Colors.white, fontSize: 14),
-          decoration: InputDecoration(
-            hintText: 'New password (min 6 chars)',
-            hintStyle: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 13),
-            filled: true, fillColor: Colors.white.withOpacity(0.06),
-            contentPadding: const EdgeInsets.fromLTRB(14, 12, 48, 12),
-            prefixIcon: Icon(Icons.lock_outline_rounded, color: Colors.white.withOpacity(0.4), size: 18),
-            suffixIcon: IconButton(
-              icon: Icon(_passObscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                color: Colors.white.withOpacity(0.4), size: 18),
-              onPressed: () => setState(() => _passObscure = !_passObscure),
-            ),
-            border:        OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: kAmber.withOpacity(0.6))),
-          ),
-        ),
-        if (_error != null) ...[
-          const SizedBox(height: 8),
-          Text(_error!, style: const TextStyle(fontSize: 12, color: kRose)),
-        ],
       ]),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.4))),
-        ),
-        GestureDetector(
-          onTap: _saving ? null : _submit,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(color: kAmber, borderRadius: BorderRadius.circular(8)),
-            child: _saving
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-              : Text(
-                  widget.isFirstSetup ? 'Save' : 'Update',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
-          ),
-        ),
-      ],
     );
   }
 }

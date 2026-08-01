@@ -26,6 +26,7 @@ class RishtaProposal {
   final double? weightKg;
   final String? complexion;
   final String maritalStatus;
+  final String? openToPolygamy;
   final int? boys;
   final int? girls;
   final String? practiceLevel;
@@ -95,6 +96,7 @@ class RishtaProposal {
     this.weightKg,
     this.complexion,
     required this.maritalStatus,
+    this.openToPolygamy,
     this.boys,
     this.girls,
     this.practiceLevel,
@@ -182,6 +184,7 @@ class RishtaProposal {
       weightKg: (json['weight_kg'] as num?)?.toDouble(),
       complexion: json['complexion'] as String?,
       maritalStatus: json['marital_status'] as String,
+      openToPolygamy: json['open_to_polygamy'] as String?,
       boys: (json['boys'] as num?)?.toInt(),
       girls: (json['girls'] as num?)?.toInt(),
       practiceLevel: json['practice_level'] as String?,
@@ -254,6 +257,7 @@ class RishtaProposal {
         'weight_kg': weightKg,
         'complexion': complexion,
         'marital_status': maritalStatus,
+        'open_to_polygamy': openToPolygamy,
         'boys': boys,
         'girls': girls,
         'practice_level': practiceLevel,

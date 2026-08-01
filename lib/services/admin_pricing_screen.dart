@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/supabase_service.dart';
 import '../services/admin_supabase_extension.dart';
@@ -47,7 +46,6 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
   bool _referralEnabled = true;
   bool _referralSignupEnabled = true;
   bool _helpCenterEnabled = true;
-  String _helpCenterPageName = 'Help Center';
   String _paymentMode = 'auto'; // 'auto' = online SafePay, 'manual' = bank transfer only
   bool _paymentSectionExpanded = false;
   bool _pricingSectionExpanded = false;
@@ -80,7 +78,6 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
         'referral_enabled': _referralEnabled.toString(),
         'referral_signup_enabled': _referralSignupEnabled.toString(),
         'help_center_enabled': _helpCenterEnabled.toString(),
-        'help_center_page_name': _helpCenterPageName,
         'referral_commission': _referralRateCtrl.text.trim(),
         'payment_mode': _paymentMode,
         'account_number': _accountNumberCtrl.text.trim(),
@@ -156,7 +153,6 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
       _referralEnabled = map['referral_enabled'] != 'false';
       _referralSignupEnabled = map['referral_signup_enabled'] != 'false';
       _helpCenterEnabled = map['help_center_enabled'] != 'false';
-      _helpCenterPageName = map['help_center_page_name'] ?? 'Help Center';
       _paymentMode = map['payment_mode'] ?? 'auto';
       _referralRateCtrl.text        = map['referral_commission'] ?? '500';
       _accountNumberCtrl.text       = map['account_number']      ?? '';
@@ -270,7 +266,6 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
       await SupabaseService.instance.fetchAppSettings(); // refresh cache + notify all listeners
       _originalSnapshot = _currentSnapshot();
       HapticFeedback.lightImpact();
-      _revalidateWebsiteFooter();
     } catch (e) {
       _showError(e.toString());
     } finally {
@@ -308,53 +303,6 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
       backgroundColor: kRose, behavior: SnackBarBehavior.floating, margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ));
-  }
-
-  // Tells the website to immediately refresh its footer cache via the
-  // existing proposal-status-changed webhook — same endpoint, same secret,
-  // same pattern as admin approval/rejection and all other revalidation.
-  // No separate /api/revalidate endpoint or REVALIDATE_TOKEN needed.
-  Future<void> _revalidateWebsiteFooter() async {
-    try {
-      await http.post(
-        Uri.parse('https://joronline.com/api/webhooks/proposal-status-changed'),
-        headers: {
-          'Content-Type': 'application/json',
-          'x-webhook-secret': '89897ad4d61258ec79b72c4b5f3b6622c4a0d60533ed5189b8383886ccf1df6c',
-        },
-        body: '{"footer_changed":true}',
-      );
-    } catch (_) {
-      // Non-fatal — the toggle/rename already saved successfully.
-    }
-  }
-
-  Future<void> _onToggleHelpCenter() async {
-    if (_helpCenterEnabled) {
-      // Turning off never needs a check.
-      setState(() => _helpCenterEnabled = false);
-      _revalidateWebsiteFooter();
-      return;
-    }
-    // Turning on requires at least one affiliate actually marked as a
-    // Center — otherwise this would flip on a link to an empty page.
-    try {
-      final res = await _client
-          .from('affiliates')
-          .select('id')
-          .eq('is_center', true)
-          .or('deleted.is.null,deleted.eq.false')
-          .limit(1);
-      final hasCenter = (res as List).isNotEmpty;
-      if (!hasCenter) {
-        _showError('Mark at least one affiliate as a Center first (long-press an affiliate → Add as Center).');
-        return;
-      }
-      setState(() => _helpCenterEnabled = true);
-      _revalidateWebsiteFooter();
-    } catch (_) {
-      _showError('Could not check Center status. Please try again.');
-    }
   }
 
   @override
@@ -591,6 +539,11 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
                     ),
                   ),
                 ]),
+                SizedBox(height: s.s(6)),
+                Text(
+                  'Doesn\'t restrict purchases — everyone who buys a Featured slot still gets it (as long as their city has room). This only controls how many show boosted-to-top in the general/unfiltered Proposals feed at once: if more profiles are boosted than this number, they\'re split into batches that take turns every hour, so everyone gets their turn in the spotlight over the day instead of a fixed few hogging it.',
+                  style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.35), height: 1.4),
+                ),
               ]),
               ],
 
@@ -614,56 +567,6 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
             final helpCenterColor = _helpCenterEnabled ? kPurple : kInkFaint;
             final priceColor = _referralEnabled ? kPurple : kInkFaint;
             return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(14)),
-                decoration: BoxDecoration(
-                  color: helpCenterColor.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(s.s(12)),
-                  border: Border.all(color: helpCenterColor.withOpacity(0.3)),
-                ),
-                child: Row(children: [
-                  Icon(Icons.support_agent_rounded, size: s.d(18), color: helpCenterColor.withOpacity(0.7)),
-                  SizedBox(width: s.s(10)),
-                  Expanded(child: Row(children: [
-                    Flexible(child: Text(_helpCenterPageName, style: TextStyle(fontSize: s.f(15), fontWeight: FontWeight.w800, color: helpCenterColor))),
-                    SizedBox(width: s.s(4)),
-                    GestureDetector(
-                      onTap: () async {
-                        final ctrl = TextEditingController(text: _helpCenterPageName);
-                        final newName = await showDialog<String>(
-                          context: context,
-                          builder: (dialogCtx) => AlertDialog(
-                            backgroundColor: const Color(0xFF1E1A33),
-                            title: const Text('Rename Page', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                            content: TextField(
-                              controller: ctrl,
-                              autofocus: true,
-                              style: const TextStyle(color: Colors.white),
-                              decoration: InputDecoration(
-                                filled: true,
-                                fillColor: Colors.black.withOpacity(0.25),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-                              ),
-                            ),
-                            actions: [
-                              TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Cancel')),
-                              TextButton(onPressed: () => Navigator.pop(dialogCtx, ctrl.text.trim()), child: const Text('Save')),
-                            ],
-                          ),
-                        );
-                        if (newName == null || newName.isEmpty || newName == _helpCenterPageName) return;
-                        setState(() => _helpCenterPageName = newName);
-                        await _client.rpc('admin_upsert_setting', params: {'p_key': 'help_center_page_name', 'p_value': newName});
-                        _revalidateWebsiteFooter();
-                      },
-                      child: Icon(Icons.edit_rounded, size: s.d(14), color: helpCenterColor.withOpacity(0.5)),
-                    ),
-                  ])),
-                  _buildToggle(_helpCenterEnabled, kPurple, () => _onToggleHelpCenter()),
-                ]),
-              ),
-              SizedBox(height: s.s(14)),
               if (_referralEnabled) ...[
                 Container(
                   padding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(14)),
@@ -677,6 +580,21 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
                     SizedBox(width: s.s(10)),
                     Expanded(child: Text('New Signups', style: TextStyle(fontSize: s.f(15), fontWeight: FontWeight.w800, color: signupColor))),
                     _buildToggle(_referralSignupEnabled, kPurple, () => setState(() => _referralSignupEnabled = !_referralSignupEnabled)),
+                  ]),
+                ),
+                SizedBox(height: s.s(14)),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(14)),
+                  decoration: BoxDecoration(
+                    color: helpCenterColor.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(s.s(12)),
+                    border: Border.all(color: helpCenterColor.withOpacity(0.3)),
+                  ),
+                  child: Row(children: [
+                    Icon(Icons.support_agent_rounded, size: s.d(18), color: helpCenterColor.withOpacity(0.7)),
+                    SizedBox(width: s.s(10)),
+                    Expanded(child: Text('Help Center Link (Website Footer)', style: TextStyle(fontSize: s.f(15), fontWeight: FontWeight.w800, color: helpCenterColor))),
+                    _buildToggle(_helpCenterEnabled, kPurple, () => setState(() => _helpCenterEnabled = !_helpCenterEnabled)),
                   ]),
                 ),
                 SizedBox(height: s.s(14)),
@@ -743,8 +661,8 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
                   ),
                   SizedBox(width: s.s(12)),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('Manual Payment', style: TextStyle(fontSize: s.f(15), fontWeight: FontWeight.w800, color: Colors.white)),
-                    Text('Wallet / Bank Transfer', style: TextStyle(fontSize: s.f(11.5), color: Colors.white.withOpacity(0.4))),
+                    Text('Payment Mode', style: TextStyle(fontSize: s.f(15), fontWeight: FontWeight.w800, color: Colors.white)),
+                    Text(_paymentMode == 'auto' ? 'Auto Payment' : 'Manual Payment', style: TextStyle(fontSize: s.f(11.5), color: Colors.white.withOpacity(0.4))),
                   ])),
                   GestureDetector(
                     onTap: () => setState(() => _paymentMode = _paymentMode == 'auto' ? 'manual' : 'auto'),
@@ -753,11 +671,11 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
                       width: s.d(36), height: s.d(20),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(s.s(10)),
-                        color: _paymentMode == 'manual' ? kPurple : Colors.white.withOpacity(0.15),
+                        color: _paymentMode == 'auto' ? kPurple : Colors.white.withOpacity(0.15),
                       ),
                       child: AnimatedAlign(
                         duration: const Duration(milliseconds: 200),
-                        alignment: _paymentMode == 'manual' ? Alignment.centerRight : Alignment.centerLeft,
+                        alignment: _paymentMode == 'auto' ? Alignment.centerRight : Alignment.centerLeft,
                         child: Container(
                           width: s.d(16), height: s.d(16),
                           margin: EdgeInsets.symmetric(horizontal: s.s(2)),

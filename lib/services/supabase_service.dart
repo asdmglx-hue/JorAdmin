@@ -24,6 +24,14 @@ const _r2PublicUrl       = 'https://pub-45b25e06fb4b4f448d2ee349c6f55922.r2.dev'
 //    final db = SupabaseService.instance;
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Result of validating a coupon code against the live coupon_codes table.
+class _CouponResolution {
+  final String type; // 'percentage' or 'free_days'
+  final int? discountPercent;
+  final int? freeDays;
+  _CouponResolution({required this.type, this.discountPercent, this.freeDays});
+}
+
 class SupabaseService extends ChangeNotifier {
   SupabaseService._();
   static final SupabaseService instance = SupabaseService._();
@@ -42,6 +50,49 @@ class SupabaseService extends ChangeNotifier {
   /// protected notifyListeners() API directly.
   void notify() => notifyListeners();
 
+  /// Fires the "Profile Approved" push notification via the notify-status-change
+  /// edge function. The function looks up the user's fcm_token itself — this
+  /// call only needs the proposal id. Fire-and-forget: never blocks or fails
+  /// the approval flow if the push doesn't go through.
+  void _notifyProfileApproved(String proposalId) {
+    _client.functions.invoke('notify-status-change', body: {
+      'type': 'profile_approved',
+      'proposal_id': proposalId,
+    }).then((_) {
+      debugPrint('✅ profile_approved push sent for proposalId=$proposalId');
+    }).catchError((e) {
+      debugPrint('⚠️  profile_approved push failed for proposalId=$proposalId: $e');
+    });
+  }
+
+  /// Fires the "Profile Rejected" push notification via the same edge
+  /// function. Same fire-and-forget pattern — never blocks or fails the
+  /// reject flow if the push doesn't go through.
+  void _notifyProfileRejected(String proposalId) {
+    _client.functions.invoke('notify-status-change', body: {
+      'type': 'profile_rejected',
+      'proposal_id': proposalId,
+    }).then((_) {
+      debugPrint('✅ profile_rejected push sent for proposalId=$proposalId');
+    }).catchError((e) {
+      debugPrint('⚠️  profile_rejected push failed for proposalId=$proposalId: $e');
+    });
+  }
+
+  /// Fires the "Subscription Renewed" push notification with the new
+  /// expiry date. Same fire-and-forget pattern as the others.
+  void _notifySubscriptionRenewed(String proposalId, DateTime expiry) {
+    _client.functions.invoke('notify-status-change', body: {
+      'type': 'subscription_renewed',
+      'proposal_id': proposalId,
+      'expiry': expiry.toUtc().toIso8601String(),
+    }).then((_) {
+      debugPrint('✅ subscription_renewed push sent for proposalId=$proposalId');
+    }).catchError((e) {
+      debugPrint('⚠️  subscription_renewed push failed for proposalId=$proposalId: $e');
+    });
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   //  AUTH — Admin login / logout
   // ══════════════════════════════════════════════════════════════════════════
@@ -54,6 +105,20 @@ class SupabaseService extends ChangeNotifier {
         onConflict: 'device_id',
       );
     } catch (_) {}
+  }
+
+  /// The real all-time unique visitor count — every distinct device that's
+  /// ever opened the user app, tracked directly by trackAppVisit() above.
+  /// This is a genuinely different (and much larger) number than "how many
+  /// people submitted a full profile" — most visitors never get that far,
+  /// which is exactly why this shouldn't be approximated from proposals.
+  Future<int> fetchVisitorCount() async {
+    try {
+      final res = await _client.from('app_visitors').select('device_id').count(CountOption.exact);
+      return res.count;
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// Returns {total, male, female} counts of active proposals
@@ -416,15 +481,17 @@ class SupabaseService extends ChangeNotifier {
         .select('id')
         .single();
 
+    final proposalId = inserted['id'] as String;
+
     // Store CNIC for subscription check on feed load
     _submittedCnic = safeData['cnic'] as String?;
-    return inserted['id'] as String;
+
+    return proposalId;
   }
 
-  /// Returns the public URL for a profile photo.
-  String getProfilePhotoUrl(String storagePath) {
-    return _client.storage.from('profile-photos').getPublicUrl(storagePath);
-  }
+  // Note: profile photo URLs are always R2 URLs already stored directly on
+  // the proposal row (via _uploadToR2 above) — there's no separate
+  // Supabase Storage bucket in use anywhere in this app.
 
   // ══════════════════════════════════════════════════════════════════════════
   //  SUBSCRIPTION — Code redemption & status check
@@ -620,6 +687,26 @@ class SupabaseService extends ChangeNotifier {
     }
   }
 
+  /// Checks the CNIC + password against admin_accounts (Dashboard →
+  /// Settings → Create Admin). Returns the admin's name on match, or null.
+  /// Used only by the regular login screen — has nothing to do with the
+  /// separate Admin Panel PIN login.
+  Future<String?> verifyAdminAccount(String cnic, String password) async {
+    try {
+      final res = await _client
+          .from('admin_accounts')
+          .select('name')
+          .eq('cnic', cnic.trim())
+          .eq('password', password.trim())
+          .limit(1);
+      final list = res as List;
+      if (list.isEmpty) return null;
+      return list.first['name'] as String? ?? 'Admin';
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<CodeRedemptionResult> activateByCnic(String cnic) async {
     try {
       final res = await _client.rpc('activate_by_cnic', params: {
@@ -694,6 +781,33 @@ class SupabaseService extends ChangeNotifier {
     return (res as num?)?.toDouble() ?? 0.0;
   }
 
+  /// Looks up a frozen, archived revenue snapshot for a completed past
+  /// month (see monthly_revenue_log / archive_monthly_revenue in the DB).
+  /// Returns null if no snapshot exists for that month — either because it
+  /// hasn't ended yet, or because it ended before this archiving feature
+  /// existed. Callers should show "no data" rather than guess in that case.
+  Future<double?> fetchArchivedMonthRevenue(int year, int month) async {
+    final res = await _client
+        .from('monthly_revenue_log')
+        .select('total_revenue')
+        .eq('year', year)
+        .eq('month', month)
+        .maybeSingle();
+    if (res == null) return null;
+    return (res['total_revenue'] as num?)?.toDouble();
+  }
+
+  /// All archived months, most recent first — powers the revenue History
+  /// list. Only ever contains genuinely completed, frozen months.
+  Future<List<Map<String, dynamic>>> fetchMonthlyRevenueHistory() async {
+    final res = await _client
+        .from('monthly_revenue_log')
+        .select('year, month, total_revenue')
+        .order('year', ascending: false)
+        .order('month', ascending: false);
+    return List<Map<String, dynamic>>.from(res as List);
+  }
+
   Future<void> pauseUser(String userId) async {
     await _client.from('proposals').update({'status': 'paused'}).eq('id', userId);
     notifyListeners();
@@ -728,6 +842,7 @@ class SupabaseService extends ChangeNotifier {
       }).eq('id', userId);
       debugPrint('🟢 approveAiProposal done for userId=$userId');
       notifyListeners();
+      _notifyProfileApproved(userId);
     } catch (e) {
       debugPrint('approveAiProposal error: $e');
       rethrow;
@@ -740,6 +855,9 @@ class SupabaseService extends ChangeNotifier {
     File? profilePhoto,
     File? cnicFront,
     File? cnicBack,
+    File? degreeCertificate,
+    File? degreeCertificate2,
+    File? degreeCertificate3,
   }) async {
     final res = await _client.from('proposals').insert(data).select('id').single();
     final id = res['id'] as String;
@@ -760,11 +878,17 @@ class SupabaseService extends ChangeNotifier {
     final profileUrl = await _up(profilePhoto, 'profile');
     final frontUrl   = await _up(cnicFront,    'cnic_front');
     final backUrl    = await _up(cnicBack,      'cnic_back');
+    final certUrl    = await _up(degreeCertificate,  'degree_certificate');
+    final cert2Url   = await _up(degreeCertificate2, 'degree_certificate_2');
+    final cert3Url   = await _up(degreeCertificate3, 'degree_certificate_3');
 
     final updates = <String, dynamic>{};
     if (profileUrl != null) updates['profile_photo_url'] = profileUrl;
     if (frontUrl   != null) updates['cnic_front_url']    = frontUrl;
     if (backUrl    != null) updates['cnic_back_url']     = backUrl;
+    if (certUrl    != null) updates['degree_certificate_url']   = certUrl;
+    if (cert2Url   != null) updates['degree_certificate_2_url'] = cert2Url;
+    if (cert3Url   != null) updates['degree_certificate_3_url'] = cert3Url;
     if (updates.isNotEmpty) {
       await _client.from('proposals').update(updates).eq('id', id);
     }
@@ -804,16 +928,162 @@ class SupabaseService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Approves a proposal: sets status=active AND creates a paid subscription
-  /// Rs. 1,000 basic plan, 90 days validity — called when admin confirms payment
+  /// Re-validates a coupon code against the live coupon_codes table — checks
+  /// it exists, is still active, and hasn't expired. Used at the moment of
+  /// approval/renewal rather than trusting whatever was true when the user
+  /// first applied it, since the coupon may have since been deactivated,
+  /// deleted, or hit its expiry date. Returns null if invalid for any reason.
+  Future<_CouponResolution?> _resolveCoupon(String? code) async {
+    if (code == null || code.trim().isEmpty) return null;
+    try {
+      final res = await _client
+          .from('coupon_codes')
+          .select('coupon_type, discount_percent, free_days, active, expires_at')
+          .ilike('code', code.trim())
+          .maybeSingle();
+      if (res == null) return null;
+      if (res['active'] != true) return null;
+      final expiresAt = res['expires_at'] != null ? DateTime.tryParse(res['expires_at'] as String) : null;
+      if (expiresAt != null && expiresAt.isBefore(DateTime.now().toUtc())) return null;
+      return _CouponResolution(
+        type: res['coupon_type'] as String? ?? 'percentage',
+        discountPercent: (res['discount_percent'] as num?)?.toInt(),
+        freeDays: (res['free_days'] as num?)?.toInt(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Approves a proposal: sets status=active AND creates a subscription.
+  /// If Free Mode is on: normally free for everyone. If the admin has also
+  /// restricted Free Mode to "new users only", the free trial is only
+  /// granted when this CNIC has never had an active subscription before —
+  /// otherwise it's charged the normal Standard Plan price, even while Free
+  /// Mode is on.
   Future<void> approveProposal(String userId) async {
+    // A person can now pay via Google Play before their content is
+    // reviewed at all (see apply_play_billing_purchase, which deliberately
+    // leaves `status` alone so the profile stays pending-but-paid until
+    // this moment). If that already happened, this proposal's
+    // subscription fields hold real money data — approving must NOT
+    // recompute and overwrite them with generic settings-based values the
+    // way it does for the old manual-payment path below. Only publish the
+    // content in that case.
+    final hasRealPayment = await _client
+        .from('play_billing_purchases')
+        .select('id')
+        .eq('proposal_id', userId)
+        .eq('kind', 'subscription')
+        .limit(1);
+    if ((hasRealPayment as List).isNotEmpty) {
+      final now = DateTime.now().toUtc().toIso8601String();
+      debugPrint('[APPROVE] userId=$userId has a real Google Play payment on record — '
+          'publishing content only, leaving paid subscription data untouched.');
+      await _client.from('proposals').update({
+        'status': 'active',
+        'approved_at': now,
+        'applied_coupon_code': null,
+        'coupon_discount_percent': null,
+      }).eq('id', userId);
+      notifyListeners();
+      _notifyProfileApproved(userId);
+      return;
+    }
+
     final settings = await fetchAppSettings();
     final isFreeMode = settings['free_mode'] == 'true';
-    final price = isFreeMode ? 0 : (int.tryParse(settings['standard_plan_price'] ?? '1000') ?? 1000);
-    final days = int.tryParse(settings['standard_plan_days'] ?? '90') ?? 90;
-    final expiry = DateTime.now().add(Duration(days: days)).toIso8601String();
+    final newUsersOnly = settings['free_mode_new_users_only'] == 'true';
+    final standardPrice = int.tryParse(settings['standard_plan_price'] ?? '1000') ?? 1000;
+    final standardDays = int.tryParse(settings['standard_plan_days'] ?? '90') ?? 90;
+    debugPrint('[APPROVE] userId=$userId isFreeMode=$isFreeMode newUsersOnly=$newUsersOnly '
+        'raw_free_mode=${settings['free_mode']} raw_new_users_only=${settings['free_mode_new_users_only']} '
+        'raw_trial_days=${settings['free_mode_trial_days']}');
 
-    final now = DateTime.now().toIso8601String();
+    final row = await _client
+        .from('proposals')
+        .select('cnic, applied_coupon_code')
+        .eq('id', userId)
+        .single();
+    final cnic = row['cnic'] as String?;
+    final appliedCouponCode = row['applied_coupon_code'] as String?;
+    final coupon = await _resolveCoupon(appliedCouponCode);
+    debugPrint('[APPROVE] appliedCouponCode=$appliedCouponCode -> '
+        '${coupon == null ? (appliedCouponCode != null ? "invalid/expired/inactive — ignored" : "none") : "valid: type=${coupon.type} pct=${coupon.discountPercent} freeDays=${coupon.freeDays}"}');
+
+    int price;
+    int days;
+
+    if (isFreeMode && newUsersOnly) {
+      bool everActiveBefore = false;
+      if (cnic != null && cnic.isNotEmpty) {
+        // IMPORTANT: checking approved_at here was a bug — that column has
+        // a database-level DEFAULT of now(), so it's set on every proposal
+        // the instant it's submitted, even while still pending, before any
+        // admin has approved anything. That made it look like every CNIC
+        // had "already been active" regardless of real history.
+        // subscription_start has no such default — it's only ever written
+        // by an actual approval (approveProposal / renewSubscription /
+        // approveAiProposal), so it's the real signal for "has this CNIC
+        // ever genuinely been approved before."
+        final prior = await _client
+            .from('proposals')
+            .select('id')
+            .eq('cnic', cnic)
+            .not('subscription_start', 'is', null)
+            .limit(1);
+        everActiveBefore = (prior as List).isNotEmpty;
+        debugPrint('[APPROVE] cnic=$cnic priorApprovedRows=${(prior).length} everActiveBefore=$everActiveBefore');
+      } else {
+        debugPrint('[APPROVE] cnic is null/empty on this proposal — treating as not-active-before by default');
+      }
+      if (everActiveBefore) {
+        price = standardPrice;
+        days = standardDays;
+        debugPrint('[APPROVE] branch=everActiveBefore -> price=$price days=$days');
+      } else {
+        price = 0;
+        days = int.tryParse(settings['free_mode_trial_days'] ?? '30') ?? 30;
+        debugPrint('[APPROVE] branch=newUserFreeTrial -> price=$price days=$days');
+      }
+    } else if (isFreeMode) {
+      // Free Mode applies to everyone, unrestricted — existing behavior.
+      price = 0;
+      days = standardDays;
+      debugPrint('[APPROVE] branch=freeModeUnrestricted -> price=$price days=$days');
+    } else {
+      price = standardPrice;
+      days = standardDays;
+      debugPrint('[APPROVE] branch=paid -> price=$price days=$days');
+    }
+
+    // Apply the coupon on top of whatever price/days was decided above.
+    // A 'free_days' coupon ONLY adds bonus days to whatever duration was
+    // already decided (e.g. 90 standard days + 10 free-days coupon = 100
+    // days total) — it does NOT touch the price. The bonus days are a perk
+    // layered on top of a normal paid plan; the person's recorded spending
+    // (amount_paid / Total Spending) should still reflect what they actually
+    // paid for the plan itself. A 'percentage' coupon discounts whatever
+    // price was already decided, and only matters when there's something to
+    // discount (a free trial/free-mode price of 0 has nothing to reduce).
+    // If the coupon didn't pass live validation (deleted, deactivated, or
+    // expired since the user applied it), coupon is null and nothing here
+    // changes — no discount, no error.
+    if (coupon != null) {
+      if (coupon.type == 'free_days' && coupon.freeDays != null && coupon.freeDays! > 0) {
+        final totalDays = days + coupon.freeDays!;
+        debugPrint('[APPROVE] coupon=$appliedCouponCode free_days=${coupon.freeDays} added to plan days=$days -> total=$totalDays (price unchanged: $price)');
+        days = totalDays;
+      } else if (coupon.type == 'percentage' && price > 0 && coupon.discountPercent != null && coupon.discountPercent! > 0) {
+        final discounted = (price * (100 - coupon.discountPercent!) / 100).round();
+        debugPrint('[APPROVE] coupon=$appliedCouponCode discount=${coupon.discountPercent}% price $price -> $discounted');
+        price = discounted;
+      }
+    }
+
+    final expiry = DateTime.now().toUtc().add(Duration(days: days)).toIso8601String();
+
+    final now = DateTime.now().toUtc().toIso8601String();
     await _client.from('proposals').update({
       'status': 'active',
       'subscription_tier': 'basic',
@@ -823,21 +1093,45 @@ class SupabaseService extends ChangeNotifier {
       'subscription_expiry': expiry,
       'subscription_start': now,
       'approved_at': now,
+      'applied_coupon_code': null,
+      'coupon_discount_percent': null,
     }).eq('id', userId);
 
     notifyListeners();
+    _notifyProfileApproved(userId);
   }
 
   Future<Map<String, dynamic>> renewSubscription(String userId) async {
     final settings = await fetchAppSettings();
     final isFreeMode = settings['free_mode'] == 'true';
-    final price = isFreeMode ? 0 : (int.tryParse(settings['standard_plan_price'] ?? '1000') ?? 1000);
-    final days  = int.tryParse(settings['standard_plan_days'] ?? '90') ?? 90;
-    final start  = DateTime.now();
-    final expiry = start.add(Duration(days: days));
+    final newUsersOnly = settings['free_mode_new_users_only'] == 'true';
+    // Renewing means this proposal already had a subscription before, so
+    // under the "new users only" restriction it's never free here — that
+    // trial is only for a genuine first-time activation in approveProposal.
+    final effectiveFreeMode = isFreeMode && !newUsersOnly;
+    int price = effectiveFreeMode ? 0 : (int.tryParse(settings['standard_plan_price'] ?? '1000') ?? 1000);
+    int days  = int.tryParse(settings['standard_plan_days'] ?? '90') ?? 90;
+
     // Add price to existing amount_paid (cumulative spent)
-    final row = await _client.from('proposals').select('amount_paid').eq('id', userId).single();
+    final row = await _client.from('proposals').select('amount_paid, applied_coupon_code').eq('id', userId).single();
     final currentPaid = (row['amount_paid'] as num?)?.toInt() ?? 0;
+    final coupon = await _resolveCoupon(row['applied_coupon_code'] as String?);
+    if (coupon != null) {
+      if (coupon.type == 'free_days' && coupon.freeDays != null && coupon.freeDays! > 0) {
+        days = days + coupon.freeDays!;
+      } else if (coupon.type == 'percentage' && price > 0 && coupon.discountPercent != null && coupon.discountPercent! > 0) {
+        price = (price * (100 - coupon.discountPercent!) / 100).round();
+      }
+    }
+
+    // .toUtc() here matters: DateTime.now() on a Pakistan device is local
+    // time with no UTC offset info. Storing that directly (as this code
+    // used to) writes a value 5 hours ahead of true UTC — the exact same
+    // bug found and fixed in the edit-review revert/keep actions, which
+    // corrupted expiry-based logic elsewhere too, not just notifications.
+    final start  = DateTime.now().toUtc();
+    final expiry = start.add(Duration(days: days));
+
     await _client.from('proposals').update({
       'status': 'active',
       'deleted_from': null,
@@ -848,9 +1142,70 @@ class SupabaseService extends ChangeNotifier {
       'subscription_expiry': expiry.toIso8601String(),
       'subscription_start': start.toIso8601String(),
       'approved_at': start.toIso8601String(),
+      'applied_coupon_code': null,
+      'coupon_discount_percent': null,
     }).eq('id', userId);
     notifyListeners();
+    _notifySubscriptionRenewed(userId, expiry);
     return {'price': price, 'days': days, 'expiry': expiry};
+  }
+
+  // For AI-imported proposals specifically: these are added directly
+  // without ever going through a real purchase/renewal, so they have no
+  // subscription_start/expiry at all (shows as "—" in Days Left). This
+  // lets an admin manually set how many days it should run for — unlike
+  // renewSubscription above, this never touches amount_paid or coupons,
+  // since it isn't a real payment event, just a manual override.
+  Future<DateTime> setCustomSubscriptionDays(String userId, int days) async {
+    final start = DateTime.now().toUtc();
+    final expiry = start.add(Duration(days: days));
+    await _client.from('proposals').update({
+      'status': 'active',
+      'deleted_from': null,
+      'subscription_status': 'active',
+      'subscription_days': days,
+      'subscription_expiry': expiry.toIso8601String(),
+      'subscription_start': start.toIso8601String(),
+    }).eq('id', userId);
+    notifyListeners();
+    return expiry;
+  }
+
+  // Generates the next CNIC in a strictly sequential series (a persistent
+  // counter server-side, not a client-guessed number) — used only for
+  // auto-filling AI-imported proposals that don't have a real CNIC yet.
+  // Always starts with "00000", a prefix no real Pakistani CNIC ever uses.
+  Future<String> generateNextAiCnic() async {
+    final res = await _client.rpc('generate_next_ai_cnic');
+    return res as String;
+  }
+
+  // Single atomic action for approving an AI-imported proposal from the
+  // Users screen's long-press flow — sets CNIC, password, and
+  // subscription/expiry (all required), plus amount spent (optional),
+  // and moves it out of the AI category by changing admin_notes away
+  // from 'AI_IMPORTED' — done server-side in one RPC rather than several
+  // separate updates that could partially fail.
+  //
+  // Deliberately a different name from the pre-existing approveAiProposal
+  // above (used by the Proposals screen's own simpler quick-approve flow,
+  // which doesn't collect CNIC/password and isn't being changed here) —
+  // that method stays exactly as it was.
+  Future<void> approveAiProposalWithDetails({
+    required String userId,
+    required String cnic,
+    required String password,
+    required int days,
+    double? amountPaid,
+  }) async {
+    await _client.rpc('approve_ai_proposal', params: {
+      'p_id': userId,
+      'p_cnic': cnic,
+      'p_password': password,
+      'p_days': days,
+      if (amountPaid != null) 'p_amount_paid': amountPaid,
+    });
+    notifyListeners();
   }
 
   Future<void> deleteUser(String userId, {String from = 'users', String? reason}) async {
@@ -860,6 +1215,12 @@ class SupabaseService extends ChangeNotifier {
       if (reason != null) 'deletion_reason': reason,
     }).eq('id', userId);
     notifyListeners();
+    // Only the Orders → Pending tab's "Reject" button uses from: 'orders' —
+    // that's specifically a pending-profile rejection, distinct from
+    // deleting an already-active user elsewhere in the admin app.
+    if (from == 'orders') {
+      _notifyProfileRejected(userId);
+    }
   }
 
   Future<void> restoreUser(String userId, String? deletedFrom) async {
@@ -940,10 +1301,19 @@ class SupabaseService extends ChangeNotifier {
           .select('id').eq('user_id', userId).eq('city', city).eq('is_used', false);
       if ((existing as List).isNotEmpty) return 'duplicate_city';
 
-      // Check city-wide 3-post limit
+      // Check the city's slot cap for that specific date — same rule and
+      // same admin-configurable setting ('max_featured_per_city') as the
+      // mobile app / website use when a user picks a date+city themselves,
+      // so admin-assigned slots and self-service requests draw from the
+      // same pool instead of two different limits.
+      final maxPerCity = int.tryParse(cachedSettings['max_featured_per_city'] ?? '5') ?? 5;
+      final dayStart = DateTime.utc(date.year, date.month, date.day);
+      final dayEnd = dayStart.add(const Duration(days: 1));
       final cityCount = await _client.from('featured_boosts').select('id')
-          .eq('city', city).eq('is_used', false);
-      if ((cityCount as List).length >= 3) return 'city_limit';
+          .eq('city', city).eq('is_used', false)
+          .gte('scheduled_date', dayStart.toIso8601String())
+          .lt('scheduled_date', dayEnd.toIso8601String());
+      if ((cityCount as List).length >= maxPerCity) return 'city_limit';
 
       await _client.rpc('admin_insert_featured_boost', params: {
         'p_user_id': userId,
@@ -990,8 +1360,49 @@ class SupabaseService extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── Admin edit screen — profile/CNIC photo uploads ────────────────────────
+  // Used when an admin changes an existing user's photo. Matches the exact
+  // same R2 path convention already used when a new user registers
+  // (proposals/<cnic>/<type>_<timestamp>.jpg) — uploads from either flow
+  // land in the same place, and neither ever stores a photo as base64 in
+  // the database.
+  Future<String> uploadUserPhoto(Uint8List bytes, String cnicOrId, String type) async {
+    final safeId = cnicOrId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final path = 'proposals/${safeId.isEmpty ? 'unknown' : safeId}/${type}_$timestamp.jpg';
+    return _uploadToR2(bytes: bytes, path: path);
+  }
+
+  // ── Ads — image or video creative upload ──────────────────────────────────
+  Future<String> uploadAdMedia(Uint8List bytes, {required bool isVideo}) async {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final ext = isVideo ? 'mp4' : 'jpg';
+    final path = 'ads/ad_$timestamp.$ext';
+    return _uploadToR2(bytes: bytes, path: path, contentType: isVideo ? 'video/mp4' : 'image/jpeg');
+  }
+
+  // ── Affiliate registration — CNIC front/back upload ───────────────────────
+  // Same R2 bucket/signing as ad media and blog covers, under its own
+  // 'affiliates/' folder. side is 'front' or 'back'.
+  Future<String> uploadAffiliateCnic(Uint8List bytes, {required String side}) async {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final path = 'affiliates/cnic_${side}_$timestamp.jpg';
+    return _uploadToR2(bytes: bytes, path: path, contentType: 'image/jpeg');
+  }
+
+  // ── Blog — cover image upload ─────────────────────────────────────────────
+  // Same R2 bucket and signing already used for proposal/CNIC photos, just
+  // under its own 'blog/' folder so cover images don't mix with user photos.
+  Future<String> uploadBlogCoverImage(File file, String pathHint) async {
+    final bytes = await file.readAsBytes();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final safeHint = pathHint.replaceAll(RegExp(r'[^a-z0-9-]'), '');
+    final path = 'blog/${safeHint.isEmpty ? 'cover' : safeHint}_$timestamp.jpg';
+    return _uploadToR2(bytes: bytes, path: path);
+  }
+
   // ── Cloudflare R2 Upload (AWS Signature V4) ───────────────────────────────
-  Future<String> _uploadToR2({required Uint8List bytes, required String path}) async {
+  Future<String> _uploadToR2({required Uint8List bytes, required String path, String contentType = 'image/jpeg'}) async {
     final uri = Uri.parse('$_r2Endpoint/$_r2Bucket/$path');
     final now = DateTime.now().toUtc();
     final dateStamp = now.year.toString() +
@@ -1010,7 +1421,7 @@ class SupabaseService extends ChangeNotifier {
     );
 
     final response = await http.put(uri, headers: {
-      'Content-Type': 'image/jpeg',
+      'Content-Type': contentType,
       'x-amz-date': amzDate,
       'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
       'Authorization': auth,
@@ -1020,6 +1431,59 @@ class SupabaseService extends ChangeNotifier {
       return '$_r2PublicUrl/$path';
     }
     throw Exception('R2 upload failed: \${response.statusCode} \${response.body}');
+  }
+
+  // Deletes a single object from R2 by its exact stored path — uses the
+  // exact same signing logic as the upload above, just for DELETE instead
+  // of PUT. A 404 (already gone) is treated as success, since the end
+  // result — the object no longer existing — is the same either way.
+  Future<void> _deleteFromR2(String path) async {
+    final uri = Uri.parse('$_r2Endpoint/$_r2Bucket/$path');
+    final now = DateTime.now().toUtc();
+    final dateStamp = now.year.toString() +
+        now.month.toString().padLeft(2, '0') +
+        now.day.toString().padLeft(2, '0');
+    final amzDate = dateStamp + 'T' +
+        now.hour.toString().padLeft(2, '0') +
+        now.minute.toString().padLeft(2, '0') +
+        now.second.toString().padLeft(2, '0') + 'Z';
+
+    final auth = _buildR2Auth(
+      method: 'DELETE',
+      objectPath: '/$_r2Bucket/$path',
+      amzDate: amzDate,
+      dateStamp: dateStamp,
+    );
+
+    final response = await http.delete(uri, headers: {
+      'Content-Type': 'image/jpeg',
+      'x-amz-date': amzDate,
+      'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
+      'Authorization': auth,
+    });
+
+    if (response.statusCode != 200 && response.statusCode != 204 && response.statusCode != 404) {
+      throw Exception('R2 delete failed: \${response.statusCode} \${response.body}');
+    }
+  }
+
+  // Deletes whichever of a user's photos actually exist in R2. Only ever
+  // called from a genuinely permanent deletion (never the soft-delete/trash
+  // step), since this cannot be undone. Best-effort per file — one failed
+  // delete doesn't stop the others or block the account deletion itself.
+  // Only touches URLs that are actually on our own R2 bucket, as a safety
+  // check against ever trying to delete something unrelated.
+  Future<void> deleteR2Photos({String? profilePhoto, String? cnicFront, String? cnicBack}) async {
+    final urls = [profilePhoto, cnicFront, cnicBack].whereType<String>();
+    for (final url in urls) {
+      if (!url.startsWith(_r2PublicUrl)) continue;
+      final path = url.substring(_r2PublicUrl.length + 1);
+      try {
+        await _deleteFromR2(path);
+      } catch (e) {
+        debugPrint('[SupabaseService] Failed to delete R2 object $path: $e');
+      }
+    }
   }
 
   String _buildR2Auth({required String method, required String objectPath, required String amzDate, required String dateStamp}) {

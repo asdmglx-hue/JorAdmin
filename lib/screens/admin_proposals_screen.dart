@@ -45,7 +45,7 @@ class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
       builder: (_, __) {
         final q = _search.toLowerCase();
         final allPending = widget.svc.users.where((u) => u.status == ProposalStatus.pending).toList();
-        final allApproved = widget.svc.users.where((u) => u.status == ProposalStatus.approved || u.status == ProposalStatus.active).toList();
+        final allApproved = widget.svc.users.where((u) => (u.status == ProposalStatus.approved || u.status == ProposalStatus.active)).toList();
         final numSearch = _search.startsWith('#') ? int.tryParse(_search.substring(1)) : null;
         final list = (_showApproved ? allApproved : allPending).where((u) =>
           q.isEmpty ||
@@ -405,6 +405,33 @@ class _PendingCard extends StatelessWidget {
                             ],
                           ),
                         ),
+                        // Someone can now pay via Google Play before content
+                        // review finishes. Always show one of the two —
+                        // Paid or Unpaid — rather than only showing Paid and
+                        // leaving Unpaid to be inferred from its absence.
+                        SizedBox(width: _S.of(context).s(4)),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(7), vertical: _S.of(context).s(2)),
+                          decoration: BoxDecoration(
+                            color: (user.subscriptionStatus == SubscriptionStatus.refunded ? kRose : user.subscriptionStatus == SubscriptionStatus.active ? kGreen : kRose).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(_S.of(context).s(7)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                user.subscriptionStatus == SubscriptionStatus.refunded ? Icons.replay_circle_filled_rounded : user.subscriptionStatus == SubscriptionStatus.active ? Icons.check_circle_rounded : Icons.remove_circle_outline_rounded,
+                                size: _S.of(context).d(10),
+                                color: user.subscriptionStatus == SubscriptionStatus.active ? kGreen : kRose,
+                              ),
+                              SizedBox(width: _S.of(context).s(3)),
+                              Text(
+                                user.subscriptionStatus == SubscriptionStatus.refunded ? 'Refunded' : user.subscriptionStatus == SubscriptionStatus.active ? 'Paid' : 'Unpaid',
+                                style: TextStyle(fontSize: _S.of(context).f(10), fontWeight: FontWeight.w700, color: user.subscriptionStatus == SubscriptionStatus.active ? kGreen : kRose),
+                              ),
+                            ],
+                          ),
+                        ),
                         if (user.adminNotes == 'AI_IMPORTED') ...[
                           SizedBox(width: _S.of(context).s(4)),
                           Container(
@@ -454,6 +481,21 @@ class _PendingCard extends StatelessWidget {
           SizedBox(height: _S.of(context).s(12)),
           _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
           _DetailRow(icon: Icons.calendar_today_rounded, label: 'Submitted ${_timeAgo(user.postedAt)}'),
+          if (user.appliedCouponCode != null && user.appliedCouponCode!.isNotEmpty) ...[
+            SizedBox(height: _S.of(context).s(4)),
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(8), vertical: _S.of(context).s(4)),
+              decoration: BoxDecoration(
+                color: kAmber.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(_S.of(context).s(7)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.local_offer_rounded, size: _S.of(context).d(12), color: kAmber),
+                SizedBox(width: _S.of(context).s(5)),
+                Text('Coupon: ${user.appliedCouponCode}', style: TextStyle(fontSize: _S.of(context).f(11), fontWeight: FontWeight.w700, color: kAmber)),
+              ]),
+            ),
+          ],
           SizedBox(height: _S.of(context).s(12)),
           Row(
             children: [
@@ -472,9 +514,33 @@ class _PendingCard extends StatelessWidget {
                       backgroundColor: const Color(0xFF16132A),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_S.of(context).s(20))),
                       title: const Text('Confirm Approval', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
-                      content: Text(
-                        'I hereby confirm that all details have been checked and the payment has been received.',
-                        style: TextStyle(color: Colors.white70, fontSize: _S.of(context).f(13.5), height: 1.55),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'I hereby confirm that all details have been checked and the payment has been received.',
+                            style: TextStyle(color: Colors.white70, fontSize: _S.of(context).f(13.5), height: 1.55),
+                          ),
+                          if (user.appliedCouponCode != null && user.appliedCouponCode!.isNotEmpty) ...[
+                            SizedBox(height: _S.of(context).s(12)),
+                            Container(
+                              padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(10), vertical: _S.of(context).s(8)),
+                              decoration: BoxDecoration(
+                                color: kAmber.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(_S.of(context).s(8)),
+                              ),
+                              child: Row(children: [
+                                Icon(Icons.local_offer_rounded, size: _S.of(context).d(14), color: kAmber),
+                                SizedBox(width: _S.of(context).s(6)),
+                                Expanded(child: Text(
+                                  'Coupon "${user.appliedCouponCode}" will be validated and applied automatically if it\'s still valid.',
+                                  style: TextStyle(fontSize: _S.of(context).f(11.5), color: kAmber, fontWeight: FontWeight.w600),
+                                )),
+                              ]),
+                            ),
+                          ],
+                        ],
                       ),
                       actions: [
                         TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5)))),
@@ -547,7 +613,7 @@ class _MiniAvatar extends StatelessWidget {
           width: s.d(40), height: s.d(40),
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: user.gender == 'Female'
+              colors: user.gender.trim().toLowerCase() == 'female'
                   ? [kRose.withOpacity(0.7), kRose]
                   : [kPurple.withOpacity(0.7), kPurpleDeep],
             ),

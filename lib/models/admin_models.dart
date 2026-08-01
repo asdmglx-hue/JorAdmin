@@ -5,7 +5,7 @@ const _unset = _Unset();
 
 enum ProposalStatus { pending, approved, active, paused, expired, deleted }
 enum SubscriptionTier { none, basic, featured }
-enum SubscriptionStatus { inactive, active, expired }
+enum SubscriptionStatus { inactive, active, expired, refunded }
 
 // ── Activation Code ───────────────────────────────────────────────────────────
 class ActivationCode {
@@ -58,6 +58,79 @@ class ActivationCode {
       );
 }
 
+// ── Admin Account ────────────────────────────────────────────────────────────
+// A CNIC + password login created from Dashboard → Settings → Create Admin.
+// Logging in with these credentials on the regular login screen unlocks
+// full (unblurred / unmasked) viewing of all profiles in the app — it does
+// NOT grant access to this Admin Panel itself (that's the separate 6-digit
+// PIN on the panel's own login screen).
+class AdminAccount {
+  final String id;
+  final String name;
+  final String cnic;
+  final String password;
+  final DateTime createdAt;
+
+  const AdminAccount({
+    required this.id,
+    required this.name,
+    required this.cnic,
+    required this.password,
+    required this.createdAt,
+  });
+
+  factory AdminAccount.fromMap(Map<String, dynamic> map) => AdminAccount(
+        id: map['id'] as String,
+        name: map['name'] as String,
+        cnic: map['cnic'] as String,
+        password: map['password'] as String,
+        createdAt: DateTime.parse(map['created_at'] as String),
+      );
+}
+
+// ── Coupon codes ─────────────────────────────────────────────────────────
+// Percentage-discount codes, distinct from ActivationCode (a single-use,
+// fixed-price gift code). A coupon can be reused by many users until the
+// admin deactivates it.
+class CouponCode {
+  final String id;
+  final String code;
+  final String type; // 'percentage' or 'free_days'
+  final int? discountPercent;
+  final int? freeDays;
+  final bool active;
+  final int timesUsed;
+  final DateTime createdAt;
+  final DateTime? expiresAt;
+
+  CouponCode({
+    required this.id,
+    required this.code,
+    required this.type,
+    this.discountPercent,
+    this.freeDays,
+    required this.active,
+    required this.timesUsed,
+    required this.createdAt,
+    this.expiresAt,
+  });
+
+  bool get isPercentage => type == 'percentage';
+  bool get isExpired => expiresAt != null && expiresAt!.isBefore(DateTime.now());
+
+  factory CouponCode.fromJson(Map<String, dynamic> json) => CouponCode(
+        id: json['id'] as String,
+        code: json['code'] as String,
+        type: json['coupon_type'] as String? ?? 'percentage',
+        discountPercent: (json['discount_percent'] as num?)?.toInt(),
+        freeDays: (json['free_days'] as num?)?.toInt(),
+        active: json['active'] as bool? ?? true,
+        timesUsed: (json['times_used'] as num?)?.toInt() ?? 0,
+        createdAt: DateTime.parse(json['created_at'] as String),
+        expiresAt: json['expires_at'] != null ? DateTime.parse(json['expires_at'] as String) : null,
+      );
+}
+
 // ── Featured Boost ────────────────────────────────────────────────────────────
 class FeaturedBoost {
   final String? id;
@@ -103,10 +176,13 @@ class AdminUser {
   final String education;
   final String? institute;
   final String? degreeTitle;
+  final String? degreeCertificateUrl;
   final String? institute2;
   final String? degreeTitle2;
+  final String? degreeCertificate2Url;
   final String? institute3;
   final String? degreeTitle3;
+  final String? degreeCertificate3Url;
   final String profession;
   final String? employmentType;
   final double? salaryStart;
@@ -115,6 +191,7 @@ class AdminUser {
   final double? weightKg;
   final String? complexion;
   final String maritalStatus;
+  final String? openToPolygamy;
   final String? marriageNumber;
   final int? boys;
   final int? girls;
@@ -176,17 +253,17 @@ class AdminUser {
   final String? profilePhoto;
   final String? cnicFront;
   final String? cnicBack;
-  final String? profilePhotoBase64;
-  final String? cnicFrontBase64;
-  final String? cnicBackBase64;
+  final String? appliedCouponCode;
 
   AdminUser({this.proposalNumber,
     required this.id, required this.name, required this.age, required this.gender,
     required this.city, this.country, required this.caste, required this.sect, this.languages = const [], required this.education,
-    this.institute, this.degreeTitle, this.institute2, this.degreeTitle2, this.institute3, this.degreeTitle3,
+    this.institute, this.degreeTitle, this.degreeCertificateUrl,
+    this.institute2, this.degreeTitle2, this.degreeCertificate2Url,
+    this.institute3, this.degreeTitle3, this.degreeCertificate3Url,
     required this.profession, this.employmentType,
     this.salaryStart, this.salaryEnd, required this.heightInches, this.weightKg,
-    this.complexion, required this.maritalStatus, this.marriageNumber, this.boys, this.girls,
+    this.complexion, required this.maritalStatus, this.openToPolygamy, this.marriageNumber, this.boys, this.girls,
     this.practiceLevel, this.hijab, this.beard, this.familyType,
     this.fatherAlive, this.motherAlive, this.fatherOccupation, this.motherOccupation,
     this.sisters = 0, this.brothers = 0, this.homeType, this.houseSize,
@@ -203,7 +280,7 @@ class AdminUser {
     this.totalSpending = 0, this.featuredPointsPurchased = 0, this.featuredPointsUsed = 0,
     this.featuredSchedule = const [], this.activationCode, this.pendingFeaturedTokens = 0,
     this.deletedFrom, this.deletionReason, this.adminNotes, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
-    this.profilePhotoBase64, this.cnicFrontBase64, this.cnicBackBase64,
+    this.appliedCouponCode,
   });
 
   factory AdminUser.fromJson(Map<String, dynamic> json) {
@@ -218,9 +295,6 @@ class AdminUser {
         ?? json['cnic_front_url'] as String?;
     String? cnicBack = photos.where((p) => (p as Map)['photo_type'] == 'cnic_back').map((p) => (p as Map)['storage_path'] as String).firstOrNull
         ?? json['cnic_back_url'] as String?;
-    final profilePhotoBase64 = json['profile_photo_base64'] as String?;
-    final cnicFrontBase64 = json['cnic_front_base64'] as String?;
-    final cnicBackBase64 = json['cnic_back_base64'] as String?;
 
     ProposalStatus status;
     switch (json['status'] as String? ?? 'pending') {
@@ -245,6 +319,7 @@ class AdminUser {
     switch (subStatusStr) {
       case 'active': subStatus = SubscriptionStatus.active; break;
       case 'expired': subStatus = SubscriptionStatus.expired; break;
+      case 'refunded': subStatus = SubscriptionStatus.refunded; break;
       default: subStatus = SubscriptionStatus.inactive;
     }
 
@@ -258,27 +333,39 @@ class AdminUser {
 
     return AdminUser(
       proposalNumber: (json['proposal_number'] as num?)?.toInt(),
-      id: json['id'] as String, name: json['name'] as String,
-      age: (json['age'] as num).toInt(), gender: json['gender'] as String,
-      city: json['city'] as String, country: json['country'] as String?,
-      caste: json['caste'] as String,
-      sect: json['sect'] as String,
+      // id is deliberately left as a hard, non-nullable cast — a proposal
+      // with no id at all would indicate a much deeper problem worth
+      // failing loudly on. Every other field below now has a defensive
+      // fallback, since we found real, legitimate rows in production
+      // with an unexpectedly null 'education' — proof that assuming any
+      // of these fields is always populated isn't safe, and a single
+      // row with one missing field should never be able to take down
+      // the entire admin app's data loading the way it just did.
+      id: json['id'] as String, name: (json['name'] as String?) ?? '(no name)',
+      age: (json['age'] as num?)?.toInt() ?? 0, gender: (json['gender'] as String?) ?? '',
+      city: (json['city'] as String?) ?? '', country: json['country'] as String?,
+      caste: (json['caste'] as String?) ?? '',
+      sect: (json['sect'] as String?) ?? '',
       languages: (json['languages'] as List<dynamic>?)?.map((e) => e as String).toList() ?? const [],
-      education: json['education'] as String,
+      education: (json['education'] as String?) ?? '',
       institute: json['institute'] as String?,
       degreeTitle: json['degree_title'] as String?,
+      degreeCertificateUrl: json['degree_certificate_url'] as String?,
       institute2: json['institute_2'] as String?,
       degreeTitle2: json['degree_title_2'] as String?,
+      degreeCertificate2Url: json['degree_certificate_2_url'] as String?,
       institute3: json['institute_3'] as String?,
       degreeTitle3: json['degree_title_3'] as String?,
-      profession: json['profession'] as String,
+      degreeCertificate3Url: json['degree_certificate_3_url'] as String?,
+      profession: (json['profession'] as String?) ?? '',
       employmentType: json['employment_type'] as String?,
       salaryStart: (json['salary_start'] as num?)?.toDouble(),
       salaryEnd: (json['salary_end'] as num?)?.toDouble(),
-      heightInches: (json['height_inches'] as num).toDouble(),
+      heightInches: (json['height_inches'] as num?)?.toDouble() ?? 0,
       weightKg: (json['weight_kg'] as num?)?.toDouble(),
       complexion: json['complexion'] as String?,
-      maritalStatus: json['marital_status'] as String,
+      maritalStatus: (json['marital_status'] as String?) ?? '',
+      openToPolygamy: json['open_to_polygamy'] as String?,
       marriageNumber: json['marriage_number'] as String?,
       boys: (json['boys'] as num?)?.toInt(), girls: (json['girls'] as num?)?.toInt(),
       practiceLevel: json['practice_level'] as String?,
@@ -300,7 +387,7 @@ class AdminUser {
       hasGenerator: json['has_generator'] as bool?, hasSolar: json['has_solar'] as bool?,
       hasServant: json['has_servant'] as bool?,
       lookingFor: json['looking_for'] as String?, about: json['about'] as String?,
-      contactPhone: json['contact_phone'] as String,
+      contactPhone: (json['contact_phone'] as String?) ?? '',
       contactPhone2: json['contact_phone_2'] as String?,
       phoneVerified: json['phone_verified'] as bool? ?? false,
       emailVerified: json['email_verified'] as bool? ?? false,
@@ -310,7 +397,7 @@ class AdminUser {
       monthlyIncome: json['monthly_income'] as String?,
       hasDisability: json['has_disability'] == null ? null : (json['has_disability'] == true || json['has_disability'] == 'true' || json['has_disability'] == 'Yes' ? 'Yes' : 'No'),
       physicallyActive: json['physically_active']?.toString(),
-      postedAt: DateTime.parse(json['posted_at'] as String),
+      postedAt: json['posted_at'] != null ? DateTime.parse(json['posted_at'] as String) : DateTime.fromMillisecondsSinceEpoch(0),
       status: status, subscriptionTier: tier, subscriptionStatus: subStatus,
       subscriptionStart: subStart,
       subscriptionExpiry: subExpiry,
@@ -326,22 +413,23 @@ class AdminUser {
       discarded: json['discarded'] as String?,
       suggestedInfo: json['suggested_info'] as String?,
       profilePhoto: profilePhoto, cnicFront: cnicFront, cnicBack: cnicBack,
-      profilePhotoBase64: profilePhotoBase64, cnicFrontBase64: cnicFrontBase64, cnicBackBase64: cnicBackBase64,
+      appliedCouponCode: json['applied_coupon_code'] as String?,
     );
   }
 
   Map<String, dynamic> toUpdateJson() => {
     'name': name, 'age': age, 'gender': gender, 'city': city, 'caste': caste,
     'sect': sect, 'languages': languages, 'education': education,
-    'institute': institute, 'degree_title': degreeTitle,
-    'institute_2': institute2, 'degree_title_2': degreeTitle2,
-    'institute_3': institute3, 'degree_title_3': degreeTitle3,
+    'institute': institute, 'degree_title': degreeTitle, 'degree_certificate_url': degreeCertificateUrl,
+    'institute_2': institute2, 'degree_title_2': degreeTitle2, 'degree_certificate_2_url': degreeCertificate2Url,
+    'institute_3': institute3, 'degree_title_3': degreeTitle3, 'degree_certificate_3_url': degreeCertificate3Url,
     'profession': profession, 'employment_type': employmentType,
     'salary_start': salaryStart, 'salary_end': salaryEnd,
     'height_inches': heightInches, 'weight_kg': weightKg,
-    'complexion': complexion, 'marital_status': maritalStatus,
+    'complexion': complexion, 'marital_status': maritalStatus, 'open_to_polygamy': openToPolygamy,
+    'marriage_number': marriageNumber,
     'boys': boys, 'girls': girls, 'practice_level': practiceLevel,
-    'hijab': hijab, 'beard': beard,
+    'hijab': hijab, 'beard': beard, 'family_type': familyType,
     'father_alive': fatherAlive, 'mother_alive': motherAlive,
     'father_occupation': fatherOccupation, 'mother_occupation': motherOccupation,
     'sisters': sisters, 'brothers': brothers, 'home_type': homeType,
@@ -350,16 +438,18 @@ class AdminUser {
       'has_other_property': hasOtherProperty,
       'other_property': otherProperty, 'car_name': carName,
     'has_generator': hasGenerator, 'has_solar': hasSolar, 'has_servant': hasServant,
-    'physically_active': physicallyActive,
+    'physically_active': physicallyActive, 'smokes': smokes, 'drinks': drinks,
     'has_kids': hasKids, 'has_siblings': hasSiblings,
+    'has_disability': hasDisability == null ? null : hasDisability == 'Yes',
     'looking_for': lookingFor, 'about': about, 'contact_phone': contactPhone,
+    'monthly_income': monthlyIncome,
     if (contactPhone2 != null) 'contact_phone_2': contactPhone2,
     if (contactPhone2 == null || contactPhone2!.isEmpty) 'contact_phone_2': null,
     'phone_verified': phoneVerified, 'email_verified': emailVerified,
     'cnic_verified': cnicVerified, 'cnic': cnic, 'password': password, 'admin_notes': adminNotes,
-    'profile_photo_base64': profilePhotoBase64,
-    'cnic_front_base64': cnicFrontBase64,
-    'cnic_back_base64': cnicBackBase64,
+    'profile_photo_url': profilePhoto,
+    'cnic_front_url': cnicFront,
+    'cnic_back_url': cnicBack,
     'status': status.name, 'subscription_tier': subscriptionTier.name,
   };
 
@@ -387,12 +477,12 @@ class AdminUser {
     DateTime? subscriptionStart, DateTime? subscriptionExpiry, double? totalSpending,
     int? featuredPointsPurchased, int? featuredPointsUsed, List<FeaturedBoost>? featuredSchedule,
     String? activationCode, String? name, int? age, String? gender, String? city, String? caste,
-    String? sect, List<String>? languages, String? education, String? institute, String? degreeTitle,
-    String? institute2, String? degreeTitle2, String? institute3, String? degreeTitle3,
+    String? sect, List<String>? languages, String? education, String? institute, String? degreeTitle, String? degreeCertificateUrl,
+    String? institute2, String? degreeTitle2, String? degreeCertificate2Url, String? institute3, String? degreeTitle3, String? degreeCertificate3Url,
     String? profession, Object? employmentType = _unset,
     double? salaryStart, double? salaryEnd, double? heightInches, double? weightKg, Object? complexion = _unset,
-    String? maritalStatus, String? marriageNumber, int? boys, int? girls, Object? practiceLevel = _unset, Object? hijab = _unset, Object? beard = _unset,
-    String? familyType, Object? fatherAlive = _unset, Object? motherAlive = _unset, Object? fatherOccupation = _unset,
+    String? maritalStatus, Object? openToPolygamy = _unset, String? marriageNumber, int? boys, int? girls, Object? practiceLevel = _unset, Object? hijab = _unset, Object? beard = _unset, Object? familyType = _unset,
+    Object? fatherAlive = _unset, Object? motherAlive = _unset, Object? fatherOccupation = _unset,
     Object? motherOccupation = _unset, int? sisters, int? brothers, Object? homeType = _unset, Object? houseSize = _unset,
     Object? hasCar = _unset, Object? hasOtherProperty = _unset, Object? otherProperty = _unset, Object? carName = _unset, Object? location = _unset, Object? country = _unset, bool? hasGenerator, bool? hasSolar, bool? hasServant,
     Object? lookingFor = _unset, Object? about = _unset, String? contactPhone, String? contactPhone2, bool? phoneVerified,
@@ -401,23 +491,28 @@ class AdminUser {
     bool? hasKids, Object? hasSiblings = _unset,
     int? pendingFeaturedTokens, String? deletedFrom, Object? deletionReason = _unset, String? adminNotes,
     String? profilePhoto, String? cnicFront, String? cnicBack, String? password,
-    String? profilePhotoBase64, String? cnicFrontBase64, String? cnicBackBase64,
+    String? appliedCouponCode,
   }) => AdminUser(
     id: id, name: name ?? this.name, age: age ?? this.age, gender: gender ?? this.gender,
     city: city ?? this.city,
     caste: caste ?? this.caste, sect: sect ?? this.sect, languages: languages ?? this.languages,
     education: education ?? this.education, institute: institute ?? this.institute,
     degreeTitle: degreeTitle ?? this.degreeTitle,
+    degreeCertificateUrl: degreeCertificateUrl ?? this.degreeCertificateUrl,
     institute2: institute2 ?? this.institute2, degreeTitle2: degreeTitle2 ?? this.degreeTitle2,
+    degreeCertificate2Url: degreeCertificate2Url ?? this.degreeCertificate2Url,
     institute3: institute3 ?? this.institute3, degreeTitle3: degreeTitle3 ?? this.degreeTitle3,
+    degreeCertificate3Url: degreeCertificate3Url ?? this.degreeCertificate3Url,
     proposalNumber: proposalNumber ?? this.proposalNumber,
     profession: profession ?? this.profession, employmentType: employmentType is _Unset ? this.employmentType : employmentType as String?,
     salaryStart: salaryStart ?? this.salaryStart, salaryEnd: salaryEnd ?? this.salaryEnd,
     heightInches: heightInches ?? this.heightInches, weightKg: weightKg ?? this.weightKg,
     complexion: complexion is _Unset ? this.complexion : complexion as String?, maritalStatus: maritalStatus ?? this.maritalStatus,
+    openToPolygamy: openToPolygamy is _Unset ? this.openToPolygamy : openToPolygamy as String?,
     boys: boys ?? this.boys, girls: girls ?? this.girls,
     practiceLevel: practiceLevel is _Unset ? this.practiceLevel : practiceLevel as String?, hijab: hijab is _Unset ? this.hijab : hijab as String?,
-    beard: beard is _Unset ? this.beard : beard as String?, familyType: familyType ?? this.familyType,
+    beard: beard is _Unset ? this.beard : beard as String?,
+    familyType: familyType is _Unset ? this.familyType : familyType as String?,
     fatherAlive: fatherAlive is _Unset ? this.fatherAlive : fatherAlive as bool?, motherAlive: motherAlive is _Unset ? this.motherAlive : motherAlive as bool?,
     fatherOccupation: fatherOccupation is _Unset ? this.fatherOccupation : fatherOccupation as String?,
     motherOccupation: motherOccupation is _Unset ? this.motherOccupation : motherOccupation as String?,
@@ -449,9 +544,7 @@ class AdminUser {
     deletedFrom: deletedFrom ?? this.deletedFrom, deletionReason: deletionReason is _Unset ? this.deletionReason : deletionReason as String?, adminNotes: adminNotes ?? this.adminNotes, discarded: discarded ?? this.discarded, suggestedInfo: suggestedInfo ?? this.suggestedInfo,
     profilePhoto: profilePhoto ?? this.profilePhoto,
     cnicFront: cnicFront ?? this.cnicFront, cnicBack: cnicBack ?? this.cnicBack,
-    profilePhotoBase64: profilePhotoBase64 ?? this.profilePhotoBase64,
-    cnicFrontBase64: cnicFrontBase64 ?? this.cnicFrontBase64,
-    cnicBackBase64: cnicBackBase64 ?? this.cnicBackBase64,
+    appliedCouponCode: appliedCouponCode ?? this.appliedCouponCode,
   );
 }
 

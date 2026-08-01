@@ -1,5 +1,11 @@
 // lib/screens/admin/admin_edit_requests_screen.dart
-// Shows pending profile edit requests for admin to approve or reject.
+// Shows every profile edit ever made, with the current live diff (each
+// field individually revertible via an X icon) and a full chronological
+// history of every change and revert.
+//
+// Edits apply instantly on the user's side — there is no approve/reject
+// gate. status is constrained by the DB to exactly 'applied' or 'reverted'
+// (see profile_edit_requests_status_check) — no other value is valid.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -28,59 +34,118 @@ const _kInkFaint= Color(0x80FFFFFF);
 
 final _supabase = Supabase.instance.client;
 
+// ── One row from profile_edit_requests, as-is ───────────────────────────────
+class EditEvent {
+  final String id;
+  final Map<String, dynamic> changes;
+  final Map<String, dynamic> oldValues;
+  final String status; // 'applied' | 'reverted' — only two valid values
+  final DateTime submittedAt;
+  final DateTime? reviewedAt;
+
+  const EditEvent({
+    required this.id, required this.changes, required this.oldValues,
+    required this.status, required this.submittedAt, this.reviewedAt,
+  });
+
+  factory EditEvent.fromJson(Map<String, dynamic> json) => EditEvent(
+    id: json['id'] as String,
+    changes: Map<String, dynamic>.from((json['changes'] as Map?) ?? {}),
+    oldValues: Map<String, dynamic>.from((json['old_values'] as Map?) ?? {}),
+    status: json['status'] as String,
+    submittedAt: DateTime.parse(json['submitted_at'] as String),
+    reviewedAt: json['reviewed_at'] != null ? DateTime.parse(json['reviewed_at'] as String) : null,
+  );
+}
+
+// ── One field's change, whatever its current resolution ────────────────────
+class FieldChange {
+  final String key;
+  final dynamic oldValue;
+  final dynamic newValue;
+  final String resolution; // 'pending' | 'kept' | 'reverted'
+  const FieldChange({required this.key, required this.oldValue, required this.newValue, required this.resolution});
+}
+
+// ── All edit activity for one profile ───────────────────────────────────────
 class EditRequest {
-  final List<String> ids;       // all request IDs for this user (may be multiple)
   final String proposalId;
   final String proposalName;
   final String proposalCnic;
   final int proposalNumber;
-  final Map<String, dynamic> changes;  // merged changes from all requests
-  final Map<String, dynamic> oldValues;  // old values at time of submission
   final Map<String, dynamic> currentData;
-  final String status;
-  final DateTime submittedAt;   // earliest submission time
-
-  // Convenience getter for single-ID callers
-  String get id => ids.first;
+  final List<EditEvent> events; // chronological ascending — full history
+  final List<FieldChange> fieldChanges; // every field ever touched, current resolution
 
   const EditRequest({
-    required this.ids, required this.proposalId, required this.proposalName,
-    required this.proposalCnic, required this.proposalNumber,
-    required this.changes, required this.oldValues, required this.currentData, required this.status,
-    required this.submittedAt,
+    required this.proposalId, required this.proposalName, required this.proposalCnic,
+    required this.proposalNumber, required this.currentData, required this.events,
+    required this.fieldChanges,
   });
 
-  factory EditRequest.fromJson(Map<String, dynamic> json) {
-    final proposal = json['proposals'] as Map<String, dynamic>? ?? {};
-    return EditRequest(
-      ids: [json['id'] as String],
-      proposalId: json['proposal_id'] as String,
-      proposalName: proposal['name'] as String? ?? 'Unknown',
-      proposalCnic: proposal['cnic'] as String? ?? '',
-      proposalNumber: proposal['proposal_number'] as int? ?? 0,
-      changes: Map<String, dynamic>.from((json['changes'] as Map?) ?? {}),
-      oldValues: Map<String, dynamic>.from((json['old_values'] as Map?) ?? {}),
-      currentData: Map<String, dynamic>.from(proposal),
-      status: json['status'] as String? ?? 'pending',
-      submittedAt: DateTime.parse(json['submitted_at'] as String),
-    );
-  }
+  DateTime get latestEventAt => events.last.submittedAt;
 
-  /// Merge another request's changes into this one (later changes win, old values from earliest).
-  EditRequest mergeWith(EditRequest other) {
-    final merged = Map<String, dynamic>.from(changes)..addAll(other.changes);
-    final mergedOld = Map<String, dynamic>.from(other.oldValues)..addAll(oldValues);
+  List<FieldChange> get pendingFields => fieldChanges.where((f) => f.resolution == 'pending').toList();
+  bool get hasPending => fieldChanges.any((f) => f.resolution == 'pending');
+
+  /// Builds an EditRequest from all raw rows for one proposal (any order).
+  ///
+  /// Walks the chronological history to determine each field's CURRENT
+  /// resolution. Three kinds of events exist for a given field:
+  ///   - a genuine edit ('applied' with oldValue != newValue) → 'pending'
+  ///   - a "keep" confirmation ('applied' with oldValue == newValue, written
+  ///     when admin taps the tick — a real persisted event, not local-only
+  ///     state, so it survives reloads) → 'kept'
+  ///   - a revert ('reverted') → 'reverted'
+  /// Whichever of these happened LAST for a field is its current state. A
+  /// fresh genuine edit after a kept/reverted resolution correctly resets
+  /// that field back to 'pending'. The "before" value shown is always
+  /// whichever value immediately preceded the current one — e.g. if age
+  /// went 56→28→30→45→46→42 across several edits, "before" shows 46 (the
+  /// value right before the latest change), not 56 (the deep original).
+  factory EditRequest.build({
+    required String proposalId,
+    required List<Map<String, dynamic>> rows,
+    required Map<String, dynamic> proposalMeta,
+  }) {
+    final events = rows.map((r) => EditEvent.fromJson(r)).toList()
+      ..sort((a, b) => a.submittedAt.compareTo(b.submittedAt));
+
+    final Map<String, FieldChange> fieldMap = {};
+
+    for (final e in events) {
+      if (e.status == 'applied') {
+        for (final k in e.changes.keys) {
+          final oldV = e.oldValues[k];
+          final newV = e.changes[k];
+          if (oldV == newV) {
+            // Keep confirmation — field stays at whatever value it already had.
+            final prev = fieldMap[k];
+            fieldMap[k] = FieldChange(
+              key: k,
+              oldValue: prev?.oldValue,
+              newValue: prev?.newValue ?? newV,
+              resolution: 'kept',
+            );
+          } else {
+            fieldMap[k] = FieldChange(key: k, oldValue: oldV, newValue: newV, resolution: 'pending');
+          }
+        }
+      } else if (e.status == 'reverted') {
+        for (final k in e.changes.keys) {
+          fieldMap[k] = FieldChange(key: k, oldValue: e.oldValues[k], newValue: e.changes[k], resolution: 'reverted');
+        }
+      }
+    }
+
     return EditRequest(
-      ids: [...ids, ...other.ids],
       proposalId: proposalId,
-      proposalName: proposalName,
-      proposalCnic: proposalCnic,
-      proposalNumber: proposalNumber,
-      changes: merged,
-      oldValues: mergedOld,
-      currentData: currentData,
-      status: status,
-      submittedAt: submittedAt.isBefore(other.submittedAt) ? submittedAt : other.submittedAt,
+      proposalName: proposalMeta['name'] as String? ?? 'Unknown',
+      proposalCnic: proposalMeta['cnic'] as String? ?? '',
+      proposalNumber: proposalMeta['proposal_number'] as int? ?? 0,
+      currentData: proposalMeta,
+      events: events,
+      fieldChanges: _sortedByProfileOrder(fieldMap.values.toList()),
     );
   }
 }
@@ -93,15 +158,40 @@ class AdminEditRequestsScreen extends StatefulWidget {
 class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
   List<EditRequest> _requests = [];
   bool _loading = true;
-  String _filter = 'applied';
   String _search = '';
   final _searchCtrl = TextEditingController();
+  RealtimeChannel? _channel;
+  // Counts reverts within the CURRENT round of review for each profile —
+  // not the same as "how many fields are reverted in this profile's whole
+  // history". A field reverted in an earlier, already-closed round (badge
+  // already cleared once) shouldn't count toward this round's message.
+  // Reset to 0 the moment a round closes (see _maybeNotifyEditsResolved).
+  final Map<String, int> _revertedThisRound = {};
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() {
+    super.initState();
+    _load();
+    // Auto-refresh whenever a user submits a new edit while this screen is
+    // open — otherwise a fresh submission would sit invisible until admin
+    // manually hits refresh, since this screen only re-fetches on demand.
+    _channel = _supabase
+        .channel('profile_edit_requests_changes')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'profile_edit_requests',
+          callback: (_) => _load(silent: true),
+        )
+        .subscribe();
+  }
 
   @override
-  void dispose() { _searchCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _searchCtrl.dispose();
+    _channel?.unsubscribe();
+    super.dispose();
+  }
 
   List<EditRequest> get _filtered {
     if (_search.isEmpty) return _requests;
@@ -114,139 +204,146 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
     ).toList();
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
+  Future<void> _load({bool silent = false}) async {
+    // silent=true is used for refreshes triggered by an in-place action
+    // (tick/cross) or the realtime subscription. Showing the full-screen
+    // spinner there would swap the ListView out for a CircularProgressIndicator
+    // and back — which fully unmounts every card (not just reorders them),
+    // destroying their expanded state regardless of any Key. Only the
+    // user-initiated refresh button and the very first load should do that.
+    if (!silent) setState(() => _loading = true);
     try {
+      // Fetch every edit event ever (both applied + reverted — the only two
+      // valid status values) so full history is always available, and the
+      // current live diff can be computed client-side.
       final data = await _supabase
           .from('profile_edit_requests')
           .select('*, proposals(name, city, cnic, proposal_number, *)')
-          .eq('status', _filter)
-          .order('submitted_at', ascending: true) // oldest first so later changes win on merge
-          .limit(500);
+          .order('submitted_at', ascending: true)
+          .limit(1000);
 
-      // Group by proposal_id — merge all change maps per user into one card
-      final Map<String, EditRequest> grouped = {};
+      final Map<String, List<Map<String, dynamic>>> byProposal = {};
+      final Map<String, Map<String, dynamic>> metaByProposal = {};
       for (final row in data as List) {
-        final req = EditRequest.fromJson(row as Map<String, dynamic>);
-        if (grouped.containsKey(req.proposalId)) {
-          grouped[req.proposalId] = grouped[req.proposalId]!.mergeWith(req);
-        } else {
-          grouped[req.proposalId] = req;
-        }
+        final r = row as Map<String, dynamic>;
+        final pid = r['proposal_id'] as String;
+        byProposal.putIfAbsent(pid, () => []).add(r);
+        metaByProposal[pid] = (r['proposals'] as Map<String, dynamic>?) ?? {};
       }
 
-      if (mounted) setState(() {
-        // Sort by latest submission (most recent first for display)
-        _requests = grouped.values.toList()
-          ..sort((a, b) => b.submittedAt.compareTo(a.submittedAt));
-        _loading = false;
-      });
+      final built = byProposal.entries.map((entry) => EditRequest.build(
+        proposalId: entry.key,
+        rows: entry.value,
+        proposalMeta: metaByProposal[entry.key] ?? {},
+      )).toList()
+        ..sort((a, b) => b.latestEventAt.compareTo(a.latestEventAt));
+
+      if (mounted) setState(() { _requests = built; _loading = false; });
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _approve(EditRequest req) async {
-    final confirmed = await _confirm(
-      context,
-      title: 'Approve Changes?',
-      body: 'This will update ${req.proposalName}\'s profile with ${req.changes.length} change${req.changes.length > 1 ? 's' : ''}.',
-      confirmLabel: 'Approve',
-      confirmColor: _kGreen,
-    );
-    if (confirmed != true) return;
-
-    try {
-      // Apply changes to proposals table
-      await _supabase.from('proposals').update(req.changes).eq('id', req.proposalId);
-      // Mark ALL requests for this user as approved
-      await _supabase.from('profile_edit_requests').update({
-        'status': 'approved',
-        'reviewed_at': DateTime.now().toIso8601String(),
-      }).inFilter('id', req.ids);
-      // Notify user
-      await _supabase.functions.invoke('notify-edit-request', body: {
-        'type': 'edit_approved',
-        'proposal_id': req.proposalId,
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Approved — ${req.proposalName}\'s profile updated'),
-          backgroundColor: _kGreen,
-          behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 72),
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
-        ));
-        _load();
+  /// Call after an action reloads data for a proposal. If that profile now
+  /// has zero pending fields AND at least one field was reverted THIS
+  /// ROUND (not ever, historically), fires the "Profile Update" push —
+  /// this is the moment the red dot / badge for this card would disappear.
+  /// Sends the reverted count along so the message correctly says "change"
+  /// vs "changes" / "was" vs "were". Resets the round counter either way,
+  /// since this round is now closed regardless of the outcome.
+  Future<void> _maybeNotifyEditsResolved(String proposalId) async {
+    await _load(silent: true);
+    if (!mounted) return;
+    EditRequest? req;
+    for (final r in _requests) {
+      if (r.proposalId == proposalId) { req = r; break; }
+    }
+    if (req == null) return;
+    final revertedCount = _revertedThisRound[proposalId] ?? 0;
+    if (!req.hasPending) {
+      if (revertedCount > 0) {
+        _supabase.functions.invoke('notify-status-change', body: {
+          'type': 'edit_changes_rejected',
+          'proposal_id': proposalId,
+          'count': revertedCount,
+        }).catchError((_) => null);
       }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Error: $e'), backgroundColor: _kRose, behavior: SnackBarBehavior.floating,
-      ));
+      _revertedThisRound.remove(proposalId);
     }
   }
 
-  Future<void> _reject(EditRequest req) async {
+  /// Reverts a single field back to its earliest known original value.
+  /// Writes a new 'reverted' event rather than mutating the original
+  /// 'applied' rows — keeps history accurate and stays within the DB's
+  /// allowed status values.
+  Future<void> _revertField(EditRequest req, FieldChange diff) async {
     final confirmed = await _confirm(
       context,
-      title: 'Reject Changes?',
-      body: 'The user will be notified that their changes were not approved.',
-      confirmLabel: 'Reject',
+      title: 'Revert this change?',
+      body: '${_fieldLabel(diff.key)} will be reverted back to its previous value for ${req.proposalName}.',
+      confirmLabel: 'Revert',
       confirmColor: _kRose,
     );
     if (confirmed != true) return;
 
     try {
-      // Mark ALL requests for this user as rejected
-      await _supabase.from('profile_edit_requests').update({
-        'status': 'rejected',
-        'reviewed_at': DateTime.now().toIso8601String(),
-      }).inFilter('id', req.ids);
-      // Notify user
-      await _supabase.functions.invoke('notify-edit-request', body: {
-        'type': 'edit_rejected',
+      await _supabase.from('proposals')
+          .update({diff.key: diff.oldValue}).eq('id', req.proposalId);
+      await _supabase.from('profile_edit_requests').insert({
         'proposal_id': req.proposalId,
+        'changes': {diff.key: diff.oldValue},
+        'old_values': {diff.key: diff.newValue},
+        'status': 'reverted',
+        // submitted_at intentionally omitted — the DB column defaults to
+        // now() (true UTC server time). Setting it client-side via
+        // DateTime.now() was the bug: on a Pakistan device that's local
+        // time with no UTC conversion, so it got stored 5 hours into the
+        // "future" relative to real submissions — which corrupted the
+        // chronological ordering the whole resolution algorithm relies on.
+        'reviewed_at': DateTime.now().toUtc().toIso8601String(),
       });
+      _revertedThisRound[req.proposalId] = (_revertedThisRound[req.proposalId] ?? 0) + 1;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: const Text('Rejected — user notified'),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Reverted ${_fieldLabel(diff.key)} for ${req.proposalName}'),
           backgroundColor: _kRose,
           behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 72),
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 72),
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
         ));
-        _load();
+        await _maybeNotifyEditsResolved(req.proposalId);
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Error: $e'), backgroundColor: _kRose, behavior: SnackBarBehavior.floating,
+      if (!mounted) return;
+      final msg = e.toString();
+      final isNotNullViolation = msg.contains('violates not-null constraint');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(isNotNullViolation
+            ? "Can't revert ${_fieldLabel(diff.key)} — this field can't be left empty. "
+                "Edit it manually from the Users screen instead."
+            : 'Error: $e'),
+        backgroundColor: _kRose,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 72),
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
       ));
     }
   }
 
-  Future<void> _revert(EditRequest req) async {
-    final confirmed = await _confirm(
-      context,
-      title: 'Revert to Pending?',
-      body: 'This will mark the request as pending again for re-review.',
-      confirmLabel: 'Revert',
-      confirmColor: _kAmber,
-    );
-    if (confirmed != true) return;
+  /// Marks a field as explicitly kept (tick). Writes a real "confirm" event
+  /// (oldValue == newValue) rather than just local UI state — that's what
+  /// makes it survive reloads, matching how revert already persists.
+  Future<void> _keepField(EditRequest req, FieldChange field) async {
     try {
-      await _supabase.from('profile_edit_requests').update({
-        'status': 'pending',
-        'reviewed_at': null,
-      }).inFilter('id', req.ids);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Reverted to pending'),
-          behavior: SnackBarBehavior.floating,
-          margin: EdgeInsets.fromLTRB(16, 0, 16, 72),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
-        ));
-        _load();
-      }
+      await _supabase.from('profile_edit_requests').insert({
+        'proposal_id': req.proposalId,
+        'changes': {field.key: field.newValue},
+        'old_values': {field.key: field.newValue},
+        'status': 'applied',
+        // See _revertField for why submitted_at is intentionally omitted.
+        'reviewed_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      if (mounted) await _maybeNotifyEditsResolved(req.proposalId);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Error: $e'), backgroundColor: _kRose, behavior: SnackBarBehavior.floating,
@@ -279,7 +376,7 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
       appBar: AppBar(
         backgroundColor: _kCard,
         elevation: 0,
-        title: Text('Edit Requests', style: TextStyle(color: Colors.white, fontSize: s.f(17), fontWeight: FontWeight.w800)),
+        title: Text('Review Changes', style: TextStyle(color: Colors.white, fontSize: s.f(17), fontWeight: FontWeight.w800)),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
           onPressed: () => Navigator.pop(context),
@@ -291,100 +388,93 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
           ),
         ],
         bottom: PreferredSize(
-          preferredSize: Size.fromHeight(s.d(100)),
+          preferredSize: Size.fromHeight(s.d(56)),
           child: Padding(
             padding: EdgeInsets.fromLTRB(s.s(16), 0, s.s(16), s.s(10)),
-            child: Column(children: [
-              Row(children: [
-                _FilterChip(label: 'Applied', selected: _filter == 'applied', s: s, onTap: () { setState(() { _filter = 'applied'; _search = ''; _searchCtrl.clear(); }); _load(); }),
-                SizedBox(width: s.s(8)),
-                _FilterChip(label: 'Reverted', selected: _filter == 'reverted', s: s, onTap: () { setState(() { _filter = 'applied'; _search = ''; _searchCtrl.clear(); }); _load(); }),
-                SizedBox(width: s.s(8)),
-                _FilterChip(label: 'Rejected', selected: _filter == 'rejected', s: s, onTap: () { setState(() { _filter = 'rejected'; _search = ''; _searchCtrl.clear(); }); _load(); }),
-              ]),
-              SizedBox(height: s.s(10)),
-              Container(
-                height: s.d(40),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.07),
-                  borderRadius: BorderRadius.circular(s.s(12)),
-                  border: Border.all(color: Colors.white.withOpacity(0.1)),
-                ),
-                child: TextField(
-                  controller: _searchCtrl,
-                  onChanged: (v) => setState(() => _search = v),
-                  style: TextStyle(color: Colors.white, fontSize: s.f(13)),
-                  decoration: InputDecoration(
-                    hintText: 'Search by name, CNIC or #number...',
-                    hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: s.f(12.5)),
-                    prefixIcon: Icon(Icons.search_rounded, color: Colors.white.withOpacity(0.35), size: s.d(18)),
-                    border: InputBorder.none,
-                    isDense: true,
-                    contentPadding: EdgeInsets.symmetric(vertical: s.s(11)),
-                    suffixIcon: _search.isNotEmpty
-                        ? GestureDetector(
-                            onTap: () => setState(() { _search = ''; _searchCtrl.clear(); }),
-                            child: Icon(Icons.close_rounded, color: Colors.white.withOpacity(0.4), size: s.d(16)),
-                          )
-                        : null,
-                  ),
+            child: Container(
+              height: s.d(40),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.07),
+                borderRadius: BorderRadius.circular(s.s(12)),
+                border: Border.all(color: Colors.white.withOpacity(0.1)),
+              ),
+              child: TextField(
+                controller: _searchCtrl,
+                onChanged: (v) => setState(() => _search = v),
+                style: TextStyle(color: Colors.white, fontSize: s.f(13)),
+                decoration: InputDecoration(
+                  hintText: 'Search by name, CNIC or #number...',
+                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: s.f(12.5)),
+                  prefixIcon: Icon(Icons.search_rounded, color: Colors.white.withOpacity(0.35), size: s.d(18)),
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: s.s(11)),
+                  suffixIcon: _search.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () => setState(() { _search = ''; _searchCtrl.clear(); }),
+                          child: Icon(Icons.close_rounded, color: Colors.white.withOpacity(0.4), size: s.d(16)),
+                        )
+                      : null,
                 ),
               ),
-            ]),
+            ),
           ),
         ),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: _kPurple))
           : _filtered.isEmpty
-              ? const SizedBox.shrink()
+              ? Center(child: Text('No profile edits yet',
+                  style: TextStyle(color: _kInkFaint, fontSize: s.f(13))))
               : ListView.builder(
                   padding: EdgeInsets.fromLTRB(s.s(16), s.s(12), s.s(16), s.s(40)),
                   itemCount: _filtered.length,
                   itemBuilder: (_, i) => _RequestCard(
+                    // Keyed by proposalId (not list position) — after a
+                    // tick/cross, the list reloads and re-sorts by most
+                    // recently changed, which can jump this exact card to a
+                    // new position. Without this key, Flutter would treat
+                    // that as a brand new card and reset _expanded to
+                    // false, closing the dropdown right after the action.
+                    key: ValueKey(_filtered[i].proposalId),
                     req: _filtered[i], s: s,
-                    onApprove: _filter == 'applied' ? () => _revert(_filtered[i]) : null,
-                    onReject: null,
+                    onRevertField: (diff) => _revertField(_filtered[i], diff),
+                    onKeepField: (diff) => _keepField(_filtered[i], diff),
                   ),
                 ),
     );
   }
 }
 
-// ── Filter chip ───────────────────────────────────────────────────────────
-class _FilterChip extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final _S s;
-  final VoidCallback onTap;
-  const _FilterChip({required this.label, required this.selected, required this.s, required this.onTap});
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(6)),
-      decoration: BoxDecoration(
-        color: selected ? _kPurple : Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(s.s(20)),
-      ),
-      child: Text(label, style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700,
-          color: selected ? Colors.white : _kInkFaint)),
-    ),
-  );
-}
-
 // ── Request card ──────────────────────────────────────────────────────────
 class _RequestCard extends StatefulWidget {
   final EditRequest req;
   final _S s;
-  final VoidCallback? onApprove;
-  final VoidCallback? onReject;
-  const _RequestCard({required this.req, required this.s, this.onApprove, this.onReject});
+  final Future<void> Function(FieldChange) onRevertField;
+  final Future<void> Function(FieldChange) onKeepField;
+  const _RequestCard({super.key, required this.req, required this.s, required this.onRevertField, required this.onKeepField});
   @override State<_RequestCard> createState() => _RequestCardState();
 }
 
 class _RequestCardState extends State<_RequestCard> {
   bool _expanded = false;
+  bool _busy = false;
+
+  Future<void> _handleKeep(FieldChange field) async {
+    if (_busy) return;
+    HapticFeedback.lightImpact();
+    setState(() => _busy = true);
+    await widget.onKeepField(field);
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _handleRevert(FieldChange field) async {
+    if (_busy) return;
+    HapticFeedback.lightImpact();
+    setState(() => _busy = true);
+    await widget.onRevertField(field);
+    if (mounted) setState(() => _busy = false);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -403,22 +493,34 @@ class _RequestCardState extends State<_RequestCard> {
         Padding(
           padding: EdgeInsets.all(s.s(14)),
           child: Row(children: [
-            Container(
-              width: s.d(40), height: s.d(40),
-              decoration: BoxDecoration(color: _kPurple.withOpacity(0.2), borderRadius: BorderRadius.circular(s.s(12))),
-              child: Center(child: Text(req.proposalName.isNotEmpty ? req.proposalName[0] : '?',
-                  style: TextStyle(color: _kPurple, fontWeight: FontWeight.w800, fontSize: s.f(16)))),
-            ),
+            Stack(clipBehavior: Clip.none, children: [
+              Container(
+                width: s.d(40), height: s.d(40),
+                decoration: BoxDecoration(color: _kPurple.withOpacity(0.2), borderRadius: BorderRadius.circular(s.s(12))),
+                child: Center(child: Text(req.proposalName.isNotEmpty ? req.proposalName[0] : '?',
+                    style: TextStyle(color: _kPurple, fontWeight: FontWeight.w800, fontSize: s.f(16)))),
+              ),
+              if (req.hasPending)
+                Positioned(
+                  right: -2, top: -2,
+                  child: Container(
+                    width: s.d(11), height: s.d(11),
+                    decoration: BoxDecoration(
+                      color: _kRose,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: _kCard, width: 1.5),
+                    ),
+                  ),
+                ),
+            ]),
             SizedBox(width: s.s(10)),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(crossAxisAlignment: CrossAxisAlignment.center, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                 Flexible(child: Row(mainAxisSize: MainAxisSize.min, children: [
                   Flexible(child: Text(req.proposalName, style: TextStyle(color: Colors.white, fontSize: s.f(14), fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
-                  SizedBox(width: s.s(6)),
-                  _StatusBadge(status: req.status, s: s),
                 ])),
                 SizedBox(width: s.s(8)),
-                Text('${req.changes.length} change${req.changes.length > 1 ? 's' : ''} · ${_timeAgo(req.submittedAt)}',
+                Text('${req.pendingFields.length} pending · ${_timeAgo(req.latestEventAt)}',
                     style: TextStyle(color: _kInkFaint, fontSize: s.f(10))),
               ]),
               SizedBox(height: s.s(2)),
@@ -434,13 +536,14 @@ class _RequestCardState extends State<_RequestCard> {
           ]),
         ),
 
-        // Changes diff
+        // Current changes toggle
         GestureDetector(
           onTap: () => setState(() => _expanded = !_expanded),
           child: Padding(
             padding: EdgeInsets.fromLTRB(s.s(14), 0, s.s(14), s.s(10)),
             child: Row(children: [
-              Text('View changes', style: TextStyle(color: _kPurple, fontSize: s.f(12), fontWeight: FontWeight.w700)),
+              Text(req.fieldChanges.isEmpty ? 'No changes' : 'View changes',
+                  style: TextStyle(color: _kPurple, fontSize: s.f(12), fontWeight: FontWeight.w700)),
               SizedBox(width: s.s(4)),
               Icon(_expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded, color: _kPurple, size: s.d(16)),
             ]),
@@ -451,97 +554,122 @@ class _RequestCardState extends State<_RequestCard> {
           Divider(height: 1, color: Colors.white.withOpacity(0.06)),
           Padding(
             padding: EdgeInsets.all(s.s(14)),
-            child: Column(children: req.changes.entries.map((e) {
-              // Use stored old_values first (accurate even after approval), fallback to currentData
-              final oldVal = req.oldValues.containsKey(e.key) ? req.oldValues[e.key] : req.currentData[e.key];
-              final isPhoto = e.key == 'profile_photo_url';
-              return Padding(
-                padding: EdgeInsets.only(bottom: s.s(8)),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  SizedBox(width: s.s(110), child: Text(_fieldLabel(e.key),
-                      style: TextStyle(fontSize: s.f(11.5), color: _kInkFaint))),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    if (isPhoto) ...[
-                      if (oldVal != null && oldVal.toString().isNotEmpty)
-                        Padding(
-                          padding: EdgeInsets.only(bottom: s.s(4)),
-                          child: GestureDetector(
-                            onTap: () => _showFullPhoto(context, oldVal.toString()),
-                            child: Stack(children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(s.s(8)),
-                                child: Image.network(oldVal.toString(), width: s.d(60), height: s.d(60), fit: BoxFit.cover,
-                                    errorBuilder: (_, __, ___) => const SizedBox.shrink()),
-                              ),
-                              Positioned.fill(child: Container(
-                                decoration: BoxDecoration(color: _kRose.withOpacity(0.3), borderRadius: BorderRadius.circular(s.s(8))),
-                              )),
-                            ]),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: () {
+              final widgets = <Widget>[];
+              String? lastSection;
+              for (final diff in req.fieldChanges) {
+                final section = _kFieldSection[diff.key] ?? 'Other';
+                // profile_photo_url has no heading of its own (matches the
+                // edit screen, where the photo sits above "Basic
+                // Information" with no label). Every other field's
+                // section heading is only shown once, right before the
+                // first field belonging to it.
+                if (diff.key != 'profile_photo_url' && section != lastSection) {
+                  widgets.add(Padding(
+                    padding: EdgeInsets.only(top: lastSection == null ? 0 : s.s(6), bottom: s.s(8)),
+                    child: Text(section.toUpperCase(),
+                        style: TextStyle(fontSize: s.f(10), fontWeight: FontWeight.w800, color: _kPurple, letterSpacing: 0.6)),
+                  ));
+                  lastSection = section;
+                } else if (diff.key == 'profile_photo_url') {
+                  lastSection = section;
+                }
+
+                final isPhoto = diff.key == 'profile_photo_url';
+                final isResolved = diff.resolution != 'pending';
+                widgets.add(Padding(
+                padding: EdgeInsets.only(bottom: s.s(10)),
+                child: Opacity(
+                  opacity: isResolved ? 0.8 : 1.0,
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    SizedBox(width: s.s(100), child: Text(_fieldLabel(diff.key),
+                        style: TextStyle(fontSize: s.f(11.5), color: _kInkFaint))),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      if (isPhoto) ...[
+                        if (diff.oldValue != null && diff.oldValue.toString().isNotEmpty)
+                          Padding(
+                            padding: EdgeInsets.only(bottom: s.s(4)),
+                            child: GestureDetector(
+                              onTap: () => _showFullPhoto(context, diff.oldValue.toString()),
+                              child: Stack(children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(s.s(8)),
+                                  child: Image.network(diff.oldValue.toString(), width: s.d(60), height: s.d(60), fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                                ),
+                                Positioned.fill(child: Container(
+                                  decoration: BoxDecoration(color: _kRose.withOpacity(0.3), borderRadius: BorderRadius.circular(s.s(8))),
+                                )),
+                              ]),
+                            ),
+                          ),
+                        GestureDetector(
+                          onTap: () => _showFullPhoto(context, diff.newValue.toString()),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(s.s(8)),
+                            child: Image.network(diff.newValue.toString(), width: s.d(60), height: s.d(60), fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => Container(
+                                  width: s.d(60), height: s.d(60),
+                                  decoration: BoxDecoration(color: _kGreen.withOpacity(0.2), borderRadius: BorderRadius.circular(s.s(8))),
+                                  child: Icon(Icons.broken_image_rounded, color: _kGreen, size: s.d(24)),
+                                )),
                           ),
                         ),
-                      GestureDetector(
-                        onTap: () => _showFullPhoto(context, e.value.toString()),
-                        child: ClipRRect(
+                      ] else ...[
+                        if (diff.oldValue != null)
+                          Text(_formatValue(diff.key, diff.oldValue), style: TextStyle(fontSize: s.f(11.5), color: _kRose,
+                              decoration: TextDecoration.lineThrough)),
+                        Text(_formatValue(diff.key, diff.newValue), style: TextStyle(fontSize: s.f(12), color: _kGreen, fontWeight: FontWeight.w700)),
+                      ],
+                    ])),
+                    if (isResolved)
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: s.s(8), vertical: s.s(5)),
+                        margin: EdgeInsets.only(left: s.s(8)),
+                        decoration: BoxDecoration(
+                          color: (diff.resolution == 'kept' ? _kGreen : _kRose).withOpacity(0.12),
                           borderRadius: BorderRadius.circular(s.s(8)),
-                          child: Image.network(e.value.toString(), width: s.d(60), height: s.d(60), fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => Container(
-                                width: s.d(60), height: s.d(60),
-                                decoration: BoxDecoration(color: _kGreen.withOpacity(0.2), borderRadius: BorderRadius.circular(s.s(8))),
-                                child: Icon(Icons.broken_image_rounded, color: _kGreen, size: s.d(24)),
-                              )),
+                        ),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(diff.resolution == 'kept' ? Icons.check_circle_rounded : Icons.undo_rounded,
+                              size: s.d(12), color: diff.resolution == 'kept' ? _kGreen : _kRose),
+                          SizedBox(width: s.s(4)),
+                          Text(diff.resolution == 'kept' ? 'Approved' : 'Reverted',
+                              style: TextStyle(fontSize: s.f(10.5), color: diff.resolution == 'kept' ? _kGreen : _kRose, fontWeight: FontWeight.w700)),
+                        ]),
+                      )
+                    else ...[
+                      GestureDetector(
+                        onTap: _busy ? null : () => _handleKeep(diff),
+                        child: Container(
+                          width: s.d(26), height: s.d(26),
+                          margin: EdgeInsets.only(left: s.s(8)),
+                          decoration: BoxDecoration(
+                            color: _kGreen.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(s.s(8)),
+                          ),
+                          child: Icon(Icons.check_rounded, color: _kGreen, size: s.d(15)),
                         ),
                       ),
-                    ] else ...[
-                      if (oldVal != null)
-                        Text(_formatValue(e.key, oldVal), style: TextStyle(fontSize: s.f(11.5), color: _kRose,
-                            decoration: TextDecoration.lineThrough)),
-                      Text(_formatValue(e.key, e.value), style: TextStyle(fontSize: s.f(12), color: _kGreen, fontWeight: FontWeight.w700)),
+                      GestureDetector(
+                        onTap: _busy ? null : () => _handleRevert(diff),
+                        child: Container(
+                          width: s.d(26), height: s.d(26),
+                          margin: EdgeInsets.only(left: s.s(6)),
+                          decoration: BoxDecoration(
+                            color: _kRose.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(s.s(8)),
+                          ),
+                          child: Icon(Icons.close_rounded, color: _kRose, size: s.d(15)),
+                        ),
+                      ),
                     ],
-                  ])),
-                ]),
-              );
-            }).toList()),
-          ),
-        ],
-
-        // Action buttons (only for pending)
-        if (widget.onApprove != null || widget.onReject != null) ...[
-          Divider(height: 1, color: Colors.white.withOpacity(0.06)),
-          Padding(
-            padding: EdgeInsets.all(s.s(12)),
-            child: Row(children: [
-              Expanded(child: GestureDetector(
-                onTap: () { HapticFeedback.mediumImpact(); widget.onReject?.call(); },
-                child: Container(
-                  padding: EdgeInsets.symmetric(vertical: s.s(10)),
-                  decoration: BoxDecoration(
-                    color: _kRose.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(s.s(12)),
-                  ),
-                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Icon(Icons.close_rounded, color: _kRose, size: s.d(16)),
-                    SizedBox(width: s.s(6)),
-                    Text('Reject', style: TextStyle(color: _kRose, fontWeight: FontWeight.w800, fontSize: s.f(13))),
                   ]),
                 ),
-              )),
-              SizedBox(width: s.s(10)),
-              Expanded(child: GestureDetector(
-                onTap: () { HapticFeedback.mediumImpact(); widget.onApprove?.call(); },
-                child: Container(
-                  padding: EdgeInsets.symmetric(vertical: s.s(10)),
-                  decoration: BoxDecoration(
-                    color: _kGreen.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(s.s(12)),
-                  ),
-                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Icon(Icons.check_rounded, color: _kGreen, size: s.d(16)),
-                    SizedBox(width: s.s(6)),
-                    Text('Approve', style: TextStyle(color: _kGreen, fontWeight: FontWeight.w800, fontSize: s.f(13))),
-                  ]),
-                ),
-              )),
-            ]),
+                ));
+              }
+              return widgets;
+            }()),
           ),
         ],
       ]),
@@ -576,65 +704,127 @@ class _RequestCardState extends State<_RequestCard> {
       ),
     );
   }
-
-  String _timeAgo(DateTime dt) {
-    final diff = DateTime.now().difference(dt);
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    return '${diff.inDays}d ago';
-  }
-
-  String _formatValue(String key, dynamic value) {
-    if (value == null) return '—';
-    // Height: convert inches to feet'inches"
-    if (key == 'height_inches') {
-      final inches = (value as num).toDouble();
-      final ft = inches ~/ 12;
-      final inch = (inches % 12).round();
-      return "$ft'$inch\"";
-    }
-    // Weight: append kg
-    if (key == 'weight_kg') return '${value} kg';
-    // Booleans
-    if (value is bool) return value ? 'Yes' : 'No';
-    // Lists (languages)
-    if (value is List) return value.join(', ');
-    return '$value';
-  }
-
-  String _fieldLabel(String key) {
-    const labels = {
-      'name': 'Name', 'age': 'Age', 'city': 'City', 'country': 'Country',
-      'contact_phone': 'Phone', 'contact_phone_2': 'Phone 2',
-      'about': 'About', 'looking_for': 'Looking For',
-      'profession': 'Occupation', 'education': 'Education',
-      'degree_title': 'Degree', 'institute': 'Institute',
-      'marital_status': 'Marital Status', 'complexion': 'Complexion',
-      'practice_level': 'Practice', 'caste': 'Caste', 'sect': 'Sect',
-      'height_inches': 'Height', 'weight_kg': 'Weight',
-      'profile_photo_url': 'Profile Photo',
-      'brothers': 'Brothers', 'sisters': 'Sisters',
-      'father_alive': 'Father', 'mother_alive': 'Mother',
-      'home_type': 'Home Type', 'has_car': 'Car', 'car_name': 'Car Name',
-      'has_generator': 'Generator', 'has_solar': 'Solar', 'has_servant': 'Servant',
-      'monthly_income': 'Income', 'employment_type': 'Employment',
-    };
-    return labels[key] ?? key;
-  }
 }
 
-// ── Status badge ──────────────────────────────────────────────────────────
-class _StatusBadge extends StatelessWidget {
-  final String status;
-  final _S s;
-  const _StatusBadge({required this.status, required this.s});
-  @override
-  Widget build(BuildContext context) {
-    final color = status == 'approved' ? _kGreen : status == 'rejected' ? _kRose : const Color(0xFFF59E0B);
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: s.s(8), vertical: s.s(3)),
-      decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(s.s(20))),
-      child: Text(status.toUpperCase(), style: TextStyle(color: color, fontSize: s.f(10), fontWeight: FontWeight.w800)),
-    );
+String _timeAgo(DateTime dt) {
+  final diff = DateTime.now().difference(dt);
+  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+  if (diff.inHours < 24) return '${diff.inHours}h ago';
+  return '${diff.inDays}d ago';
+}
+
+String _formatValue(String key, dynamic value) {
+  if (value == null) return '—';
+  // Height: convert inches to feet'inches"
+  if (key == 'height_inches') {
+    final inches = (value as num).toDouble();
+    final ft = inches ~/ 12;
+    final inch = (inches % 12).round();
+    return "$ft'$inch\"";
   }
+  // Weight: append kg
+  if (key == 'weight_kg') return '${value} kg';
+  // Booleans
+  if (value is bool) return value ? 'Yes' : 'No';
+  // Lists (languages)
+  if (value is List) return value.join(', ');
+  return '$value';
+}
+
+String _fieldLabel(String key) {
+  const labels = {
+    'name': 'Name', 'age': 'Age', 'city': 'City', 'country': 'Country',
+    'contact_phone': 'Phone', 'contact_phone_2': 'Phone 2',
+    'about': 'About', 'looking_for': 'Looking For',
+    'profession': 'Occupation', 'education': 'Education',
+    'degree_title': 'Degree', 'institute': 'Institute',
+    'degree_title_2': 'Degree 2', 'institute_2': 'Institute 2',
+    'degree_title_3': 'Degree 3', 'institute_3': 'Institute 3',
+    'marital_status': 'Marital Status', 'marriage_number': 'Looking For (Marriage)',
+    'has_kids': 'Has Kids', 'boys': 'Sons', 'girls': 'Daughters',
+    'open_to_polygamy': 'Open to Polygamy', 'family_type': 'Family Type', 'complexion': 'Complexion',
+    'practice_level': 'Religion Practice Level', 'caste': 'Caste', 'sect': 'Sect / Maslak',
+    'hijab': 'Wears Hijab', 'beard': 'Has Beard', 'languages': 'Native Language',
+    'height_inches': 'Height', 'weight_kg': 'Weight',
+    'profile_photo_url': 'Profile Photo',
+    'brothers': 'Brothers', 'sisters': 'Sisters', 'has_siblings': 'Has Siblings',
+    'father_alive': 'Father', 'mother_alive': 'Mother',
+    'father_occupation': 'Father Occupation', 'mother_occupation': 'Mother Occupation',
+    'employment_type': 'Employment Type', 'monthly_income': 'Monthly Income',
+    'physically_active': 'Lifestyle', 'smokes': 'Smoker',
+    'has_disability': 'Disability / Chronic Illness', 'disability_details': 'Disability Details',
+    'home_type': 'Home Type', 'location': 'Location (Area)', 'house_size': 'House Size',
+    'has_car': 'Car', 'car_name': 'Car Name',
+    'has_other_property': 'Other Property', 'other_property': 'Property Type',
+    'has_generator': 'Generator', 'has_solar': 'Solar', 'has_servant': 'Servant',
+  };
+  return labels[key] ?? key;
+}
+
+// ── Canonical field order + section headings ────────────────────────────────
+// Mirrors edit_profile_screen.dart's exact layout (section-by-section, field
+// order within each section) so admin sees changes in the same sequence the
+// person actually filled the form in, instead of "whichever field happened
+// to be edited first across this profile's whole history" (the old
+// insertion-order behavior). Fields not listed here (legacy/unknown keys)
+// fall into "Other" at the end rather than disappearing.
+const _kFieldOrder = <String>[
+  'profile_photo_url',
+  // Basic Information
+  'name', 'age', 'city', 'country', 'weight_kg', 'height_inches', 'complexion',
+  'marital_status', 'marriage_number', 'has_kids', 'boys', 'girls',
+  'open_to_polygamy', 'caste', 'sect', 'practice_level', 'hijab', 'beard',
+  'languages', 'about', 'looking_for',
+  // Family
+  'family_type', 'father_alive', 'mother_alive', 'father_occupation', 'mother_occupation',
+  'has_siblings', 'brothers', 'sisters',
+  // Education & Career
+  'education', 'degree_title', 'institute', 'degree_title_2', 'institute_2',
+  'degree_title_3', 'institute_3', 'profession', 'employment_type', 'monthly_income',
+  // Health & Lifestyle
+  'physically_active', 'smokes', 'has_disability', 'disability_details',
+  // Property & Assets
+  'home_type', 'location', 'house_size', 'has_car', 'car_name',
+  'has_other_property', 'other_property',
+  // Contact
+  'contact_phone', 'contact_phone_2',
+];
+
+const _kFieldSection = <String, String>{
+  'name': 'Basic Information', 'age': 'Basic Information', 'city': 'Basic Information',
+  'country': 'Basic Information', 'weight_kg': 'Basic Information', 'height_inches': 'Basic Information',
+  'complexion': 'Basic Information', 'marital_status': 'Basic Information', 'marriage_number': 'Basic Information',
+  'has_kids': 'Basic Information', 'boys': 'Basic Information', 'girls': 'Basic Information',
+  'open_to_polygamy': 'Basic Information', 'caste': 'Basic Information', 'sect': 'Basic Information',
+  'practice_level': 'Basic Information', 'hijab': 'Basic Information', 'beard': 'Basic Information',
+  'languages': 'Basic Information', 'about': 'Basic Information', 'looking_for': 'Basic Information',
+  'family_type': 'Family', 'father_alive': 'Family', 'mother_alive': 'Family',
+  'father_occupation': 'Family', 'mother_occupation': 'Family', 'has_siblings': 'Family',
+  'brothers': 'Family', 'sisters': 'Family',
+  'education': 'Education & Career', 'degree_title': 'Education & Career', 'institute': 'Education & Career',
+  'degree_title_2': 'Education & Career', 'institute_2': 'Education & Career',
+  'degree_title_3': 'Education & Career', 'institute_3': 'Education & Career',
+  'profession': 'Education & Career', 'employment_type': 'Education & Career', 'monthly_income': 'Education & Career',
+  'physically_active': 'Health & Lifestyle', 'smokes': 'Health & Lifestyle',
+  'has_disability': 'Health & Lifestyle', 'disability_details': 'Health & Lifestyle',
+  'home_type': 'Property & Assets', 'location': 'Property & Assets', 'house_size': 'Property & Assets',
+  'has_car': 'Property & Assets', 'car_name': 'Property & Assets',
+  'has_other_property': 'Property & Assets', 'other_property': 'Property & Assets',
+  'contact_phone': 'Contact', 'contact_phone_2': 'Contact',
+};
+
+/// Sorts fields into the same order as the Edit Profile screen, section by
+/// section. profile_photo_url always leads (it has no section heading of
+/// its own, matching the edit screen). Anything not in _kFieldOrder keeps
+/// its relative order and is placed after everything recognized.
+List<FieldChange> _sortedByProfileOrder(List<FieldChange> fields) {
+  final sorted = List<FieldChange>.from(fields);
+  sorted.sort((a, b) {
+    final ia = _kFieldOrder.indexOf(a.key);
+    final ib = _kFieldOrder.indexOf(b.key);
+    final ra = ia == -1 ? _kFieldOrder.length : ia;
+    final rb = ib == -1 ? _kFieldOrder.length : ib;
+    return ra.compareTo(rb);
+  });
+  return sorted;
 }

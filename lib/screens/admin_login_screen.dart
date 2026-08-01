@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
+import '../services/fcm_service.dart';
 import '../services/supabase_service.dart';
 import 'admin_dashboard_screen.dart';
 
@@ -93,11 +94,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     final pin = _pin.join();
 
     bool success = await _db.adminLogin(_adminEmail, pin);
-    if (!success) success = _svc.login(pin);
 
     if (!mounted) return;
 
     if (success) {
+      await FCMService.instance.saveAdminToken(); // ✨ FIXED: Added await
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
