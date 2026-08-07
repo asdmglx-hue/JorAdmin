@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'utils/theme.dart';
 import 'services/fcm_service.dart';
+import 'services/supabase_service.dart';
 import 'screens/admin_login_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,6 +45,13 @@ void main() async {
   // logic and the in-app notification system have been removed and are
   // pending a fresh implementation.
   await FCMService.instance.init();
+
+  // Fetch DB-driven lists in background — castes, cities, occupations
+  // use SharedPreferences caching so they're available immediately on
+  // next launch even without network.
+  SupabaseService.instance.fetchCastes();
+  SupabaseService.instance.fetchCities();
+  SupabaseService.instance.fetchOccupations();
 
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,

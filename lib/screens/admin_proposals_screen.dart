@@ -46,11 +46,13 @@ class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
         final q = _search.toLowerCase();
         final allPending = widget.svc.users.where((u) => u.status == ProposalStatus.pending).toList();
         final allApproved = widget.svc.users.where((u) => (u.status == ProposalStatus.approved || u.status == ProposalStatus.active)).toList();
-        final numSearch = _search.startsWith('#') ? int.tryParse(_search.substring(1)) : null;
+        final numSearch = _search.startsWith('#') ? int.tryParse(_search.substring(1)) : int.tryParse(_search);
         final list = (_showApproved ? allApproved : allPending).where((u) =>
           q.isEmpty ||
           u.name.toLowerCase().contains(q) ||
-          (u.cnic ?? '').toLowerCase().contains(q) ||
+          u.city.toLowerCase().contains(q) ||
+          u.contactPhone.contains(_search) ||
+          (u.cnic != null && u.cnic!.contains(_search)) ||
           (numSearch != null && u.proposalNumber == numSearch)
         ).toList();
 
@@ -119,7 +121,7 @@ class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
                       onChanged: (v) => setState(() => _search = v),
                       style: TextStyle(color: Colors.white, fontSize: _S.of(context).f(13.5)),
                       decoration: InputDecoration(
-                        hintText: 'Search by name, CNIC or #number...',
+                        hintText: 'Search by name, city, phone, CNIC or #number...',
                         hintStyle: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: _S.of(context).f(13)),
                         prefixIcon: Icon(Icons.search_rounded, color: Colors.white.withOpacity(0.3), size: _S.of(context).d(18)),
                         suffixIcon: _search.isNotEmpty

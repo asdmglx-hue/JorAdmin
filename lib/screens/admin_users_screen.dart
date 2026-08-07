@@ -1257,7 +1257,7 @@ class _FeaturedManageSheetState extends State<_FeaturedManageSheet> {
   Future<void> _schedulePost() async {
     if (_scheduling) return;
     setState(() => _scheduling = true);
-    final city = _scheduleCity.isNotEmpty ? _scheduleCity : kCities.first;
+    final city = _scheduleCity.isNotEmpty ? _scheduleCity : (SupabaseService.instance.citiesList.isNotEmpty ? SupabaseService.instance.citiesList.first : 'Lahore');
     final messenger = widget.messenger ?? ScaffoldMessenger.of(context);
     final err = await widget.svc.scheduleFeaturedPost(_user.id, _scheduleDate, city);
     HapticFeedback.mediumImpact();
@@ -2067,10 +2067,10 @@ class _AdminCitySheetState extends State<_AdminCitySheet> {
   final _ctrl = TextEditingController();
 
   Map<String, List<String>> get _filtered {
-    if (_query.isEmpty) return kCitiesGrouped;
+    if (_query.isEmpty) return SupabaseService.instance.citiesGrouped;
     final q = _query.toLowerCase();
     final result = <String, List<String>>{};
-    for (final entry in kCitiesGrouped.entries) {
+    for (final entry in SupabaseService.instance.citiesGrouped.entries) {
       final matches = entry.value.where((v) => v.toLowerCase().contains(q)).toList();
       if (matches.isNotEmpty) result[entry.key] = matches;
     }

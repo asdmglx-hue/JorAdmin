@@ -4,8 +4,10 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../widgets/photo_crop_dialog.dart';
 import '../widgets/country_picker.dart';
+import '../widgets/occupation_picker.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
+import '../services/supabase_service.dart';
 
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
@@ -73,6 +75,8 @@ class _AdminAddUserScreenState extends State<AdminAddUserScreen> {
   final _inst3Ctrl = TextEditingController();
   final _degreeTitle3Ctrl = TextEditingController();
   final _profCtrl = TextEditingController();
+  final _profCustomCtrl = TextEditingController(); // used when Other is picked
+  String _professionCategory = '';
   final _brothersCtrl = TextEditingController();
   final _sistersCtrl = TextEditingController();
   final _locationCtrl = TextEditingController();
@@ -95,7 +99,6 @@ class _AdminAddUserScreenState extends State<AdminAddUserScreen> {
   String _maritalStatus = '';
   String? _marriageNumber;
   String _familyType = '';
-  String _openToPolygamy = '';
   String _homeType = '';
   String _hasCar = '';
   String _hasOtherProperty = '';
@@ -131,7 +134,7 @@ class _AdminAddUserScreenState extends State<AdminAddUserScreen> {
     for (final c in [
       _nameCtrl, _ageCtrl, _phoneCtrl, _phone2Ctrl, _cnicCtrl, _passwordCtrl, _heightCtrl, _weightCtrl,
       _aboutCtrl, _lookingForCtrl, _instCtrl, _degreeTitleCtrl, _inst2Ctrl, _degreeTitle2Ctrl,
-      _inst3Ctrl, _degreeTitle3Ctrl, _profCtrl, _brothersCtrl, _sistersCtrl, _locationCtrl, _countryCtrl,
+      _inst3Ctrl, _degreeTitle3Ctrl, _profCtrl, _profCustomCtrl, _brothersCtrl, _sistersCtrl, _locationCtrl, _countryCtrl,
       _houseSizeCtrl, _carCtrl, _boysCtrl, _girlsCtrl, _fatherOccCtrl, _motherOccCtrl, _disabilityCtrl,
       _adminNotesCtrl,
     ]) {
@@ -177,10 +180,14 @@ class _AdminAddUserScreenState extends State<AdminAddUserScreen> {
         if (_degreeTitle2Ctrl.text.trim().isNotEmpty) 'degree_title_2': _degreeTitle2Ctrl.text.trim(),
         if (_inst3Ctrl.text.trim().isNotEmpty) 'institute_3': _inst3Ctrl.text.trim(),
         if (_degreeTitle3Ctrl.text.trim().isNotEmpty) 'degree_title_3': _degreeTitle3Ctrl.text.trim(),
-        if (_profCtrl.text.trim().isNotEmpty) 'profession': _profCtrl.text.trim(),
+        if (_profCtrl.text.trim() == 'Other' && _profCustomCtrl.text.trim().isNotEmpty)
+          'profession': _profCustomCtrl.text.trim()
+        else if (_profCtrl.text.trim().isNotEmpty)
+          'profession': _profCtrl.text.trim(),
+        if (_professionCategory.isNotEmpty)
+          'profession_category': _professionCategory,
         if (_maritalStatus.isNotEmpty) 'marital_status': _maritalStatus,
         if (_marriageNumber != null && _marriageNumber!.isNotEmpty) 'marriage_number': _marriageNumber,
-        if (_openToPolygamy.isNotEmpty) 'open_to_polygamy': _openToPolygamy,
         if (_familyType.isNotEmpty) 'family_type': _familyType,
         if (_homeType.isNotEmpty) 'home_type': _homeType,
         if (_houseSizeCtrl.text.trim().isNotEmpty) 'house_size': _houseSizeCtrl.text.trim(),
@@ -289,11 +296,27 @@ class _AdminAddUserScreenState extends State<AdminAddUserScreen> {
             _subField('Location', _locationCtrl),
             _subField('House Size', _houseSizeCtrl),
           ],
-          _drop('Caste', _caste, kCastes, (v) => setState(() => _caste = v)),
+          _drop('Caste', _caste, SupabaseService.instance.castesList, (v) => setState(() => _caste = v)),
           _drop('Sect / Maslak', _sect, kSects, (v) => setState(() => _sect = v)),
           _drop('Native Language', _language ?? '', kLanguages, (v) => setState(() => _language = v.isEmpty ? null : v)),
-          _field('Occupation', _profCtrl),
-          _drop('Marital Status', _maritalStatus, ['Never Married', 'Married', 'Divorced', 'Khula', 'Widowed'],
+          AdminOccupationPicker(
+            label: 'Occupation',
+            category: _professionCategory.isNotEmpty ? _professionCategory : null,
+            profession: _profCtrl.text.isNotEmpty ? _profCtrl.text : null,
+            onSelect: (cat, prof) => setState(() {
+              _profCtrl.text = prof;
+              _professionCategory = cat;
+              if (prof != 'Other') _profCustomCtrl.clear();
+            }),
+          ),
+          if (_profCtrl.text == 'Other') ...[
+            _subField('Specify Occupation', _profCustomCtrl),
+            _subDrop('Occupation Category', _professionCategory,
+                SupabaseService.instance.occupationsGrouped.keys
+                    .where((k) => k != 'Other').toList(),
+                (v) => setState(() => _professionCategory = v)),
+          ],
+          _drop('Marital Status', _maritalStatus, ['Never married', 'Married', 'Divorced', 'Khula', 'Widowed'],
               (v) => setState(() { _maritalStatus = v; if (v != 'Married') _marriageNumber = null; })),
           if (_maritalStatus == 'Married')
             _subDrop('Looking for', _marriageNumber ?? '', ['Second marriage', 'Third marriage', 'Fourth marriage'],
@@ -306,8 +329,7 @@ class _AdminAddUserScreenState extends State<AdminAddUserScreen> {
                 _subField('Daughters', _girlsCtrl, type: TextInputType.number),
               ]),
           ],
-          _drop('Open to Polygamy?', _openToPolygamy, ['Yes', 'No'], (v) => setState(() => _openToPolygamy = v),
-              infoText: 'Polygamy means having more than one wife or marrying a man who already has a wife.'),
+
           _multiField('About Yourself', _aboutCtrl, maxLength: 200),
           _multiField('Looking For', _lookingForCtrl, maxLength: 200),
 
@@ -643,10 +665,10 @@ class _AdminAddCitySheetState extends State<_AdminAddCitySheet> {
   final _ctrl = TextEditingController();
 
   Map<String, List<String>> get _filtered {
-    if (_query.isEmpty) return kCitiesGrouped;
+    if (_query.isEmpty) return SupabaseService.instance.citiesGrouped;
     final q = _query.toLowerCase();
     final result = <String, List<String>>{};
-    for (final entry in kCitiesGrouped.entries) {
+    for (final entry in SupabaseService.instance.citiesGrouped.entries) {
       final matches = entry.value.where((v) => v.toLowerCase().contains(q)).toList();
       if (matches.isNotEmpty) result[entry.key] = matches;
     }

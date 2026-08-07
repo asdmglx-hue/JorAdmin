@@ -75,6 +75,36 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
     }
   }
 
+  Future<void> _clearAll() async {
+    // Confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _kCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Clear All Notifications',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white)),
+        content: Text('This will permanently delete all notification history. This cannot be undone.',
+            style: TextStyle(fontSize: 13.5, color: Colors.white.withOpacity(0.65), height: 1.5)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.w700)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Clear All', style: TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await _client.from('notification_log').delete().eq('type', 'new_order');
+      if (mounted) setState(() { _history = []; _visibleCount = _kPageSize; });
+    } catch (_) {}
+  }
+
   String _timeAgo(DateTime t) {
     final diff = DateTime.now().difference(t);
     if (diff.inMinutes < 1) return 'Just now';
@@ -111,6 +141,17 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
         title: const Text('Notifications',
             style: TextStyle(
                 fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white)),
+        actions: [
+          if (_history.isNotEmpty)
+            TextButton(
+              onPressed: _clearAll,
+              child: const Text('Clear All',
+                  style: TextStyle(
+                      color: Color(0xFFEF4444),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13)),
+            ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(height: 1, color: _kBorder),

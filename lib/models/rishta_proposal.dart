@@ -18,6 +18,7 @@ class RishtaProposal {
   final String? degreeTitle3;
   final String? institute3;
   final String profession;
+  final String? professionCategory;
   final String? employmentType;
   final double? salaryStart;
   final double? salaryEnd;
@@ -88,6 +89,7 @@ class RishtaProposal {
     this.degreeTitle3,
     this.institute3,
     required this.profession,
+    this.professionCategory,
     this.employmentType,
     this.salaryStart,
     this.salaryEnd,
@@ -176,6 +178,7 @@ class RishtaProposal {
       degreeTitle3: json['degree_title_3'] as String?,
       institute3: json['institute_3'] as String?,
       profession: json['profession'] as String,
+      professionCategory: json['profession_category'] as String?,
       employmentType: json['employment_type'] as String?,
       salaryStart: (json['salary_start'] as num?)?.toDouble(),
       salaryEnd: (json['salary_end'] as num?)?.toDouble(),
@@ -249,6 +252,7 @@ class RishtaProposal {
         'degree_title_3': degreeTitle3,
         'institute_3': institute3,
         'profession': profession,
+        if (professionCategory != null) 'profession_category': professionCategory,
         'employment_type': employmentType,
         'salary_start': salaryStart,
         'salary_end': salaryEnd,

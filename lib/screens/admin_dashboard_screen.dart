@@ -1034,7 +1034,7 @@ class _DashboardHome extends StatelessWidget {
 
 String _fmt(double v) {
   if (v >= 1000000) return '${(v/1000000).toStringAsFixed(1)}M';
-  if (v >= 1000) return '${(v/1000).toStringAsFixed(v % 1000 == 0 ? 0 : 1)}k';
+  if (v >= 10000) return '${(v/1000).toStringAsFixed(v % 1000 == 0 ? 0 : 1)}k';
   return v.toStringAsFixed(0);
 }
 
@@ -1083,7 +1083,7 @@ class _CountUpState extends State<_CountUp> with SingleTickerProviderStateMixin 
       final val = (widget.end * _anim.value).round();
       String fmt;
       if (val >= 1000000) fmt = '${(val/1000000).toStringAsFixed(1)}M';
-      else if (val >= 1000) fmt = '${(val/1000).toStringAsFixed(val % 1000 == 0 ? 0 : 1)}k';
+      else if (val >= 10000) fmt = '${(val/1000).toStringAsFixed(val % 1000 == 0 ? 0 : 1)}k';
       else fmt = val.toString();
       return Text('${widget.prefix}$fmt${widget.suffix}', style: widget.style);
     },
@@ -1165,8 +1165,37 @@ class _StatusBreakdown extends StatelessWidget {
     final removed  = users.where((u) => u.status == ProposalStatus.deleted && u.deletedFrom == 'users').length;
     final affiliate = affiliateTotalCount;
 
+    final activeUsers = users.where((u) => u.status == ProposalStatus.active && u.subscriptionStatus == SubscriptionStatus.active);
+    final activeMale   = activeUsers.where((u) => u.gender.toLowerCase() == 'male').length;
+    final activeFemale = activeUsers.where((u) => u.gender.toLowerCase() == 'female').length;
+    // Count cities/countries using the exact same logic as the User Location
+    // section below — so the numbers always match what's shown there.
+    final localCitySet = <String>{};
+    final countrySet = <String>{};
+    for (final u in users) {
+      if (u.status == ProposalStatus.deleted) continue;
+      if (u.status == ProposalStatus.pending) continue;
+      if (u.subscriptionStatus == SubscriptionStatus.expired) continue;
+      final isOverseas = u.country != null && u.country!.isNotEmpty &&
+          u.country!.toLowerCase() != 'pakistan';
+      if (isOverseas) {
+        String country = u.country!;
+        if (country.toLowerCase() == 'united arab emirates' || country.toLowerCase() == 'uae') country = 'UAE';
+        else if (country.toLowerCase() == 'united kingdom' || country.toLowerCase() == 'uk') country = 'UK';
+        else if (country.toLowerCase() == 'united states' || country.toLowerCase() == 'united states of america' || country.toLowerCase() == 'usa') country = 'USA';
+        else if (country.toLowerCase() == 'ksa' || country.toLowerCase() == 'saudi arabia') country = 'Saudi Arabia';
+        countrySet.add(country);
+      } else {
+        final cityName = u.city == 'Other' && (u.location?.isNotEmpty ?? false) ? u.location! : u.city;
+        if (cityName.isNotEmpty && cityName != 'Other') localCitySet.add(cityName);
+      }
+    }
+    final totalCities    = localCitySet.length;
+    final totalCountries = countrySet.length;
+
     final row1 = [('Active', active), ('Inactive', inactive), ('Paused', paused), ('Featured', featured)];
     final row2 = [('Pending', pending), ('Rejected', rejected), ('Removed', removed), ('Affiliate', affiliate)];
+    final row3 = [('Male', activeMale), ('Female', activeFemale), ('Cities', totalCities), ('Countries', totalCountries)];
 
     final sc = _S.of(context);
     Widget cell(String label, int count) => Expanded(
@@ -1191,6 +1220,10 @@ class _StatusBreakdown extends StatelessWidget {
         Container(height: 1, color: Colors.white.withOpacity(0.07)),
         SizedBox(height: sc.s(14)),
         Row(children: row2.map((t) => cell(t.$1, t.$2)).toList()),
+        SizedBox(height: sc.s(14)),
+        Container(height: 1, color: Colors.white.withOpacity(0.07)),
+        SizedBox(height: sc.s(14)),
+        Row(children: row3.map((t) => cell(t.$1, t.$2)).toList()),
       ]),
     );
   }
@@ -1217,7 +1250,10 @@ class _CityBreakdownHeaderState extends State<_CityBreakdownHeader> {
     final overseasMap = <String, int>{};
     for (final u in users) {
       if (u.status == ProposalStatus.deleted) continue;
-      final isOverseas = u.country != null && u.country!.isNotEmpty;
+      if (u.status == ProposalStatus.pending) continue;
+      if (u.subscriptionStatus == SubscriptionStatus.expired) continue;
+      final isOverseas = u.country != null && u.country!.isNotEmpty &&
+          u.country!.toLowerCase() != 'pakistan';
       if (isOverseas) {
         // Normalize UAE variants
         String country = u.country!;
@@ -1227,6 +1263,8 @@ class _CityBreakdownHeaderState extends State<_CityBreakdownHeader> {
           country = 'UK';
         } else if (country.toLowerCase() == 'united states' || country.toLowerCase() == 'united states of america' || country.toLowerCase() == 'usa') {
           country = 'USA';
+        } else if (country.toLowerCase() == 'ksa' || country.toLowerCase() == 'saudi arabia') {
+          country = 'Saudi Arabia';
         }
         overseasMap[country] = (overseasMap[country] ?? 0) + 1;
       } else {
@@ -1285,55 +1323,73 @@ class _CityBreakdownHeaderState extends State<_CityBreakdownHeader> {
             borderRadius: BorderRadius.circular(s.s(18)),
             border: Border.all(color: Colors.white.withOpacity(0.07)),
           ),
-          child: ListView.separated(
-            shrinkWrap: true,
-            physics: const ClampingScrollPhysics(),
-            itemCount: sorted.length,
-            separatorBuilder: (_, __) => SizedBox(height: s.s(10)),
-            itemBuilder: (_, i) {
-              final entry = sorted[i];
-              final fraction = maxCount > 0 ? entry.value / maxCount : 0.0;
-              return Row(children: [
-                SizedBox(
-                  width: s.s(96),
-                  child: Text(entry.key,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w600, color: Colors.white70)),
-                ),
-                SizedBox(width: s.s(10)),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(s.s(4)),
-                    child: Stack(children: [
-                      Container(height: s.d(6), color: Colors.white.withOpacity(0.07)),
-                      FractionallySizedBox(
-                        widthFactor: fraction,
-                        child: Container(
-                          height: s.d(6),
-                          decoration: BoxDecoration(
-                            color: kPurple.withOpacity(0.75),
-                            borderRadius: BorderRadius.circular(s.s(4)),
-                          ),
-                        ),
-                      ),
-                    ]),
-                  ),
-                ),
-                SizedBox(width: s.s(10)),
-                SizedBox(
-                  width: s.s(28),
-                  child: Text('${entry.value}',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700,
-                      color: entry.value == maxCount ? kPurple : Colors.white.withOpacity(0.45))),
-                ),
-              ]);
-            },
-          ),
+          child: _buildLocationList(sorted, maxCount, s),
         ),
     ]);
   }
 }
+
+  Widget _locationRow(MapEntry<String, int> entry, double fraction, int maxCount, _S s) {
+    return Row(children: [
+      SizedBox(
+        width: s.s(96),
+        child: Text(entry.key,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w600, color: Colors.white70)),
+      ),
+      SizedBox(width: s.s(10)),
+      Expanded(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(s.s(4)),
+          child: Stack(children: [
+            Container(height: s.d(6), color: Colors.white.withOpacity(0.07)),
+            FractionallySizedBox(
+              widthFactor: fraction,
+              child: Container(
+                height: s.d(6),
+                decoration: BoxDecoration(
+                  color: kPurple.withOpacity(0.75),
+                  borderRadius: BorderRadius.circular(s.s(4)),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ),
+      SizedBox(width: s.s(8)),
+      SizedBox(
+        width: s.s(44),
+        child: Text('${entry.value}',
+          textAlign: TextAlign.right,
+          style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700,
+            color: entry.value == maxCount ? kPurple : Colors.white.withOpacity(0.45))),
+      ),
+    ]);
+  }
+
+  Widget _buildLocationList(List<MapEntry<String, int>> sorted, int maxCount, _S s) {
+    Widget row(int i) {
+      final entry = sorted[i];
+      final fraction = maxCount > 0 ? entry.value / maxCount : 0.0;
+      return _locationRow(entry, fraction, maxCount, s);
+    }
+    // Show 12 rows visible, rest scrollable — no divider, seamless flow
+    final itemHeight = s.s(10) + s.d(6) + s.s(10); // separator + bar + padding
+    final visibleHeight = 12 * itemHeight;
+    return SizedBox(
+      height: sorted.length <= 12 ? null : visibleHeight,
+      child: ListView.separated(
+        shrinkWrap: sorted.length <= 12,
+        physics: sorted.length <= 12
+            ? const NeverScrollableScrollPhysics()
+            : const ClampingScrollPhysics(),
+        itemCount: sorted.length,
+        separatorBuilder: (_, __) => SizedBox(height: s.s(10)),
+        itemBuilder: (_, i) => row(i),
+      ),
+    );
+  }
+
 
 class _ToggleBtn extends StatelessWidget {
   final String label;

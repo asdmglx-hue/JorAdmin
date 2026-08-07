@@ -175,7 +175,8 @@ class SupabaseService extends ChangeNotifier {
   }
 
   /// Admin signs in with email + password (replaces hardcoded PIN check).
-  Future<bool> adminLogin(String email, String password) async {
+  // Returns: true = success, false = wrong PIN, null = no internet
+  Future<bool?> adminLogin(String email, String password) async {
     try {
       final res = await _client.auth.signInWithPassword(
         email: email,
@@ -184,8 +185,21 @@ class SupabaseService extends ChangeNotifier {
       final loggedIn = res.user != null;
       if (loggedIn) notifyListeners();
       return loggedIn;
-    } on AuthException {
+    } on AuthException catch (e) {
+      // Supabase wraps SocketException inside AuthException when there's
+      // no internet — detect it by checking the message content.
+      final msg = e.message.toLowerCase();
+      if (msg.contains('socket') || msg.contains('failed host') ||
+          msg.contains('network') || msg.contains('connection') ||
+          msg.contains('clientexception')) {
+        debugPrint('[adminLogin] Network error wrapped in AuthException: ${e.message}');
+        return null;
+      }
+      debugPrint('[adminLogin] AuthException (wrong PIN): ${e.message}');
       return false;
+    } catch (e) {
+      debugPrint('[adminLogin] Other error: $e');
+      return null;
     }
   }
 
@@ -1243,6 +1257,95 @@ class SupabaseService extends ChangeNotifier {
   // ══════════════════════════════════════════════════════════════════════════
   //  ADMIN — Activation codes
   // ══════════════════════════════════════════════════════════════════════════
+
+  // ── DB-driven lists (castes, cities, occupations) ─────────────────────────
+  // Same pattern as the user app — fetch once on startup, cache in
+  // SharedPreferences, fall back to the hardcoded lists in theme.dart.
+
+  static const _kCachedCastesKey      = 'admin_cached_castes_v2';
+  static const _kCachedCitiesKey      = 'admin_cached_cities_v1';
+  static const _kCachedOccupationsKey = 'admin_cached_occupations_v1';
+
+  Map<String, List<String>> _castesGrouped      = {};
+  Map<String, List<String>> _citiesGrouped      = {};
+  Map<String, List<String>> _occupationsGrouped = {};
+
+  Map<String, List<String>> get castesGrouped =>
+      _castesGrouped.isNotEmpty ? _castesGrouped : kCastesGrouped;
+  List<String> get castesList =>
+      castesGrouped.values.expand((v) => v).toList();
+
+  Map<String, List<String>> get citiesGrouped =>
+      _citiesGrouped.isNotEmpty ? _citiesGrouped : kCitiesGrouped;
+  List<String> get citiesList =>
+      citiesGrouped.values.expand((v) => v).toList();
+
+  Map<String, List<String>> get occupationsGrouped =>
+      _occupationsGrouped.isNotEmpty ? _occupationsGrouped : kProfessionsGrouped;
+  List<String> get occupationCategories =>
+      occupationsGrouped.keys.where((k) => k != 'Other').toList()..add('Other');
+
+  Future<void> fetchCastes() async {
+    try {
+      final res = await _client.from('castes')
+          .select('name, group_name, sort_order, group_order')
+          .order('group_order').order('sort_order');
+      final rows = res as List;
+      if (rows.isEmpty) return;
+      const order = ['Punjab','Sindh','KPK / Pashtun','Kashmir & Northern','Balochistan','Urdu-speaking / Muhajir','General'];
+      final raw = <String, List<String>>{};
+      for (final row in rows) {
+        final g = row['group_name'] as String;
+        raw.putIfAbsent(g, () => []).add(row['name'] as String);
+      }
+      final grouped = <String, List<String>>{};
+      for (final g in order) { if (raw.containsKey(g)) grouped[g] = raw[g]!; }
+      for (final e in raw.entries) { if (!grouped.containsKey(e.key)) grouped[e.key] = e.value; }
+      _castesGrouped = grouped;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kCachedCastesKey, jsonEncode(grouped.map((k, v) => MapEntry(k, v))));
+    } catch (_) {}
+  }
+
+  Future<void> fetchCities() async {
+    try {
+      final res = await _client.from('cities').select('name, province, sort_order').order('sort_order');
+      final rows = res as List;
+      if (rows.isEmpty) return;
+      const order = ['Punjab','Sindh','KPK','Balochistan','Islamabad','Gilgit Baltistan','Azad Kashmir'];
+      final raw = <String, List<String>>{};
+      for (final row in rows) {
+        final p = row['province'] as String;
+        raw.putIfAbsent(p, () => []).add(row['name'] as String);
+      }
+      final grouped = <String, List<String>>{};
+      for (final p in order) { if (raw.containsKey(p)) grouped[p] = raw[p]!; }
+      for (final e in raw.entries) { if (!grouped.containsKey(e.key)) grouped[e.key] = e.value; }
+      _citiesGrouped = grouped;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kCachedCitiesKey, jsonEncode(grouped.map((k, v) => MapEntry(k, v))));
+    } catch (_) {}
+  }
+
+  Future<void> fetchOccupations() async {
+    try {
+      final res = await _client.from('occupations').select('name, category, sort_order').order('sort_order');
+      final rows = res as List;
+      if (rows.isEmpty) return;
+      const order = ['Healthcare','Engineering','IT & Tech','Education','Finance & Law','Business & Management','Government & Forces','Arts & Media','Skilled Trades','Services & Other','Other'];
+      final raw = <String, List<String>>{};
+      for (final row in rows) {
+        final c = row['category'] as String;
+        raw.putIfAbsent(c, () => []).add(row['name'] as String);
+      }
+      final grouped = <String, List<String>>{};
+      for (final g in order) { if (raw.containsKey(g)) grouped[g] = raw[g]!; }
+      for (final e in raw.entries) { if (!grouped.containsKey(e.key)) grouped[e.key] = e.value; }
+      _occupationsGrouped = grouped;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kCachedOccupationsKey, jsonEncode(grouped.map((k, v) => MapEntry(k, v))));
+    } catch (_) {}
+  }
 
   Future<Map<String, String>> fetchAppSettings() async {
     final res = await _client.from('app_settings').select();

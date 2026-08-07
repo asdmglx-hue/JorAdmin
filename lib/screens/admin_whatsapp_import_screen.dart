@@ -10,6 +10,7 @@ import '../services/ai_parse_service.dart';
 import '../widgets/photo_crop_dialog.dart';
 import '../services/admin_service.dart';
 import '../utils/theme.dart';
+import '../services/supabase_service.dart';
 
 // Claude API key — same as ai_parse_service.dart
 const _kClaudeKey = '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';
@@ -82,7 +83,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
   final _aboutCtrl       = TextEditingController();
 
   // Dropdowns
-  String? _gender, _city, _caste, _sect, _education, _maritalStatus, _openToPolygamy, _familyType;
+  String? _gender, _city, _caste, _sect, _education, _maritalStatus, _familyType;
   List<String> _languages = [];
   String? _monthlyIncome, _complexion, _homeType, _hasCar;
   String? _fatherAlive, _motherAlive, _practiceLevel, _hijab, _beard;
@@ -306,8 +307,8 @@ class _State extends State<AdminWhatsAppImportScreen> {
 
     setState(() {
       _gender        = p.gender != null ? (p.gender!.toLowerCase() == 'male' ? 'Male' : 'Female') : null;
-      _city          = _m(p.city,           kCities);
-      _caste         = _m(p.caste,          kCastes);
+      _city          = _m(p.city,           SupabaseService.instance.citiesList);
+      _caste         = _m(p.caste,          SupabaseService.instance.castesList);
       _sect          = _m(p.sect,           _kSects);
       _languages     = [];
       _education     = _m(p.education,      _kEducations);
@@ -366,7 +367,6 @@ class _State extends State<AdminWhatsAppImportScreen> {
         'education'      : _education      ?? 'Other',
         'profession'     : _profCtrl.text.trim().isNotEmpty ? _profCtrl.text.trim() : 'Not specified',
         'marital_status' : _maritalStatus  ?? 'Never married',
-        if (_openToPolygamy != null) 'open_to_polygamy' : _openToPolygamy,
         if (_familyType != null) 'family_type' : _familyType,
         'brothers'       : int.tryParse(_brothersCtrl.text.trim()) ?? 0,
         'sisters'        : int.tryParse(_sistersCtrl.text.trim()) ?? 0,
@@ -601,19 +601,17 @@ class _State extends State<AdminWhatsAppImportScreen> {
         _tf('Second Phone (optional)', _phone2Ctrl, kb: TextInputType.phone),
         _row2(_dd('Gender *', _gender, _kGenders, (v) => setState(() => _gender = v)),
               _dd('Marital Status', _maritalStatus, _kMarital, (v) => setState(() => _maritalStatus = v))),
-        _row2(_dd('Open to Polygamy?', _openToPolygamy, const ['Yes', 'No'], (v) => setState(() => _openToPolygamy = v),
-              infoText: 'Polygamy means having more than one wife or marrying a man who already has a wife.'),
-              const SizedBox()),
+
         _row2(_dd('Complexion', _complexion, _kComplexion, (v) => setState(() => _complexion = v)),
               _tf('Weight (kg)', _weightCtrl, kb: TextInputType.number)),
 
         _sec('Location'),
-        _row2(_dd('City', _city, kCities, (v) => setState(() => _city = v)),
+        _row2(_dd('City', _city, SupabaseService.instance.citiesList, (v) => setState(() => _city = v)),
               _tf('Area / Neighbourhood', _locationCtrl)),
         _row2(_tf('Country', _countryCtrl), const SizedBox()),
 
         _sec('Religion'),
-        _row2(_dd('Caste', _caste, kCastes, (v) => setState(() => _caste = v)),
+        _row2(_dd('Caste', _caste, SupabaseService.instance.castesList, (v) => setState(() => _caste = v)),
               _dd('Sect / Maslak', _sect, _kSects, (v) => setState(() => _sect = v))),
         _multiSelect('Language(s)', _languages, _kLanguages, (v) => setState(() => _languages = v)),
         _row2(

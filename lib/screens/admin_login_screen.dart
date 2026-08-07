@@ -51,6 +51,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
 
   final List<String> _pin = [];
   bool _hasError = false;
+  String _errorMessage = 'Incorrect PIN. Try again.';
   bool _loading = false;
   late AnimationController _shakeCtrl;
   late Animation<double> _shakeAnim;
@@ -78,6 +79,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     setState(() {
       _pin.add(digit);
       _hasError = false;
+      _errorMessage = 'Incorrect PIN. Try again.';
     });
     if (_pin.length == _pinLength) _verify();
   }
@@ -93,12 +95,13 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     await Future.delayed(const Duration(milliseconds: 150));
     final pin = _pin.join();
 
-    bool success = await _db.adminLogin(_adminEmail, pin);
+    final result = await _db.adminLogin(_adminEmail, pin);
+    debugPrint('[_verify] adminLogin result: $result');
 
     if (!mounted) return;
 
-    if (success) {
-      await FCMService.instance.saveAdminToken(); // ✨ FIXED: Added await
+    if (result == true) {
+      await FCMService.instance.saveAdminToken();
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -110,6 +113,9 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       _shakeCtrl.forward(from: 0);
       setState(() {
         _hasError = true;
+        _errorMessage = result == null
+            ? 'No internet connection. Please try again.'
+            : 'Incorrect PIN. Try again.';
         _pin.clear();
         _loading = false;
       });
@@ -292,7 +298,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                     color: kPurple, strokeWidth: 2))
             : _hasError
                 ? Text(
-                    'Incorrect PIN. Try again.',
+                    _errorMessage,
                     style: TextStyle(
                         fontSize: s.f(12), color: kRose.withOpacity(0.9)),
                   )

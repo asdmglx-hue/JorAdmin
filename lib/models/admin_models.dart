@@ -184,6 +184,7 @@ class AdminUser {
   final String? degreeTitle3;
   final String? degreeCertificate3Url;
   final String profession;
+  final String? professionCategory;
   final String? employmentType;
   final double? salaryStart;
   final double? salaryEnd;
@@ -261,7 +262,7 @@ class AdminUser {
     this.institute, this.degreeTitle, this.degreeCertificateUrl,
     this.institute2, this.degreeTitle2, this.degreeCertificate2Url,
     this.institute3, this.degreeTitle3, this.degreeCertificate3Url,
-    required this.profession, this.employmentType,
+    required this.profession, this.professionCategory, this.employmentType,
     this.salaryStart, this.salaryEnd, required this.heightInches, this.weightKg,
     this.complexion, required this.maritalStatus, this.openToPolygamy, this.marriageNumber, this.boys, this.girls,
     this.practiceLevel, this.hijab, this.beard, this.familyType,
@@ -358,6 +359,7 @@ class AdminUser {
       degreeTitle3: json['degree_title_3'] as String?,
       degreeCertificate3Url: json['degree_certificate_3_url'] as String?,
       profession: (json['profession'] as String?) ?? '',
+      professionCategory: json['profession_category'] as String?,
       employmentType: json['employment_type'] as String?,
       salaryStart: (json['salary_start'] as num?)?.toDouble(),
       salaryEnd: (json['salary_end'] as num?)?.toDouble(),
@@ -423,7 +425,7 @@ class AdminUser {
     'institute': institute, 'degree_title': degreeTitle, 'degree_certificate_url': degreeCertificateUrl,
     'institute_2': institute2, 'degree_title_2': degreeTitle2, 'degree_certificate_2_url': degreeCertificate2Url,
     'institute_3': institute3, 'degree_title_3': degreeTitle3, 'degree_certificate_3_url': degreeCertificate3Url,
-    'profession': profession, 'employment_type': employmentType,
+    'profession': profession, if (professionCategory != null) 'profession_category': professionCategory, 'employment_type': employmentType,
     'salary_start': salaryStart, 'salary_end': salaryEnd,
     'height_inches': heightInches, 'weight_kg': weightKg,
     'complexion': complexion, 'marital_status': maritalStatus, 'open_to_polygamy': openToPolygamy,
@@ -479,7 +481,7 @@ class AdminUser {
     String? activationCode, String? name, int? age, String? gender, String? city, String? caste,
     String? sect, List<String>? languages, String? education, String? institute, String? degreeTitle, String? degreeCertificateUrl,
     String? institute2, String? degreeTitle2, String? degreeCertificate2Url, String? institute3, String? degreeTitle3, String? degreeCertificate3Url,
-    String? profession, Object? employmentType = _unset,
+    String? profession, String? professionCategory, Object? employmentType = _unset,
     double? salaryStart, double? salaryEnd, double? heightInches, double? weightKg, Object? complexion = _unset,
     String? maritalStatus, Object? openToPolygamy = _unset, String? marriageNumber, int? boys, int? girls, Object? practiceLevel = _unset, Object? hijab = _unset, Object? beard = _unset, Object? familyType = _unset,
     Object? fatherAlive = _unset, Object? motherAlive = _unset, Object? fatherOccupation = _unset,
@@ -504,7 +506,7 @@ class AdminUser {
     institute3: institute3 ?? this.institute3, degreeTitle3: degreeTitle3 ?? this.degreeTitle3,
     degreeCertificate3Url: degreeCertificate3Url ?? this.degreeCertificate3Url,
     proposalNumber: proposalNumber ?? this.proposalNumber,
-    profession: profession ?? this.profession, employmentType: employmentType is _Unset ? this.employmentType : employmentType as String?,
+    profession: profession ?? this.profession, professionCategory: professionCategory ?? this.professionCategory, employmentType: employmentType is _Unset ? this.employmentType : employmentType as String?,
     salaryStart: salaryStart ?? this.salaryStart, salaryEnd: salaryEnd ?? this.salaryEnd,
     heightInches: heightInches ?? this.heightInches, weightKg: weightKg ?? this.weightKg,
     complexion: complexion is _Unset ? this.complexion : complexion as String?, maritalStatus: maritalStatus ?? this.maritalStatus,

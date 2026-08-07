@@ -1440,10 +1440,10 @@ class _AffiliateCitySheetState extends State<_AffiliateCitySheet> {
   final _ctrl = TextEditingController();
 
   Map<String, List<String>> get _filtered {
-    if (_query.isEmpty) return kCitiesGrouped;
+    if (_query.isEmpty) return SupabaseService.instance.citiesGrouped;
     final q = _query.toLowerCase();
     final result = <String, List<String>>{};
-    for (final entry in kCitiesGrouped.entries) {
+    for (final entry in SupabaseService.instance.citiesGrouped.entries) {
       final matches = entry.value.where((v) => v.toLowerCase().contains(q)).toList();
       if (matches.isNotEmpty) result[entry.key] = matches;
     }

@@ -10,6 +10,9 @@ import '../services/admin_service.dart';
 import '../models/admin_models.dart';
 import '../services/supabase_service.dart';
 import '../widgets/country_picker.dart';
+import '../widgets/occupation_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
@@ -103,6 +106,8 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   late TextEditingController _countryCtrl;
   late TextEditingController _disabilityDetailsCtrl;
   late TextEditingController _professionCtrl;
+  late TextEditingController _professionCustomCtrl; // used when Other is picked
+  late String _professionCategory; // tracks picked category
   late TextEditingController _fatherOccCtrl;
   late TextEditingController _motherOccCtrl;
 
@@ -172,6 +177,14 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     _countryCtrl = TextEditingController(text: _user.country ?? '');
     _disabilityDetailsCtrl = TextEditingController(text: _user.disabilityDetails ?? '');
     _professionCtrl   = TextEditingController(text: _user.profession);
+    // If the stored profession is 'Other' (free-typed), pre-fill the custom
+    // controller and set the category from the stored professionCategory.
+    // Otherwise the picker will restore the grouped selection correctly.
+    final _isOther = !SupabaseService.instance.occupationsGrouped.values
+        .expand((v) => v).contains(_user.profession) && _user.profession.isNotEmpty;
+    _professionCustomCtrl = TextEditingController(
+        text: _isOther ? _user.profession : '');
+    _professionCategory   = _user.professionCategory ?? '';
     _fatherOccCtrl    = TextEditingController(text: _user.fatherOccupation ?? '');
     _motherOccCtrl    = TextEditingController(text: _user.motherOccupation ?? '');
     _siblingsVal  = _user.hasSiblings == true ? 'Yes' : (_user.hasSiblings == false ? 'No' : '');
@@ -186,7 +199,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       _inst3Ctrl, _degreeTitle3Ctrl, _boysCtrl, _girlsCtrl, _houseSizeCtrl, _carCtrl,
       _brothersCtrl, _sistersCtrl,
       _adminNotesCtrl, _locationCtrl, _disabilityDetailsCtrl, _countryCtrl,
-      _professionCtrl, _fatherOccCtrl, _motherOccCtrl,
+      _professionCtrl, _professionCustomCtrl, _fatherOccCtrl, _motherOccCtrl,
     ]) { c.addListener(_onFieldChanged); }
   }
 
@@ -202,7 +215,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       _inst3Ctrl, _degreeTitle3Ctrl, _boysCtrl, _girlsCtrl, _houseSizeCtrl, _carCtrl,
       _brothersCtrl, _sistersCtrl,
       _adminNotesCtrl, _locationCtrl, _disabilityDetailsCtrl, _countryCtrl,
-      _professionCtrl, _fatherOccCtrl, _motherOccCtrl,
+      _professionCtrl, _professionCustomCtrl, _fatherOccCtrl, _motherOccCtrl,
     ]) { c.dispose(); }
     super.dispose();
   }
@@ -239,7 +252,12 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       girls: int.tryParse(_girlsCtrl.text),
       houseSize: _houseSizeCtrl.text.trim().isEmpty ? null : _houseSizeCtrl.text.trim(),
       carName: _carCtrl.text.trim().isEmpty ? null : _carCtrl.text.trim(),
-      profession: _professionCtrl.text.trim().isEmpty ? _user.profession : _professionCtrl.text.trim(),
+      profession: _professionCtrl.text == 'Other'
+          ? (_professionCustomCtrl.text.trim().isNotEmpty
+              ? _professionCustomCtrl.text.trim()
+              : _user.profession)
+          : (_professionCtrl.text.trim().isEmpty ? _user.profession : _professionCtrl.text.trim()),
+      professionCategory: _professionCategory.isNotEmpty ? _professionCategory : _user.professionCategory,
       fatherOccupation: _fatherOccCtrl.text.trim().isEmpty ? null : _fatherOccCtrl.text.trim(),
       motherOccupation: _motherOccCtrl.text.trim().isEmpty ? null : _motherOccCtrl.text.trim(),
       physicallyActive: _user.physicallyActive,
@@ -376,15 +394,35 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
             _subField('Location', _locationCtrl),
             _subField('House Size', _houseSizeCtrl),
           ],
-          _drop('Caste', _user.caste, kCastes,
+          _drop('Caste', _user.caste, SupabaseService.instance.castesList,
               (v) => setState(() => _user = _user.copyWith(caste: v))),
           _drop('Sect / Maslak', _user.sect, kSects,
               (v) => setState(() => _user = _user.copyWith(sect: v))),
           _drop('Native Language', _user.languages.isNotEmpty ? _user.languages.first : '', kLanguages,
               (v) => setState(() => _user = _user.copyWith(languages: v.isEmpty ? [] : [v]))),
-          _field('Occupation', _professionCtrl),
+          if (widget.readOnly)
+            _field('Occupation', _professionCtrl)
+          else ...[
+            AdminOccupationPicker(
+              label: 'Occupation',
+              category: _professionCategory.isNotEmpty ? _professionCategory : null,
+              profession: _professionCtrl.text.isNotEmpty ? _professionCtrl.text : null,
+              onSelect: (cat, prof) => setState(() {
+                _professionCtrl.text = prof;
+                _professionCategory = cat;
+                if (prof != 'Other') _professionCustomCtrl.clear();
+              }),
+            ),
+            if (_professionCtrl.text == 'Other') ...[
+              _subField('Specify Occupation', _professionCustomCtrl),
+              _subDrop('Occupation Category', _professionCategory,
+                  SupabaseService.instance.occupationsGrouped.keys
+                      .where((k) => k != 'Other').toList(),
+                  (v) => setState(() => _professionCategory = v)),
+            ],
+          ],
           _drop('Marital Status', _user.maritalStatus,
-              ['Never Married', 'Married', 'Divorced', 'Khula', 'Widowed'],
+              ['Never married', 'Married', 'Divorced', 'Khula', 'Widowed'],
               (v) => setState(() => _user = _user.copyWith(maritalStatus: v, marriageNumber: v != 'Married' ? null : _user.marriageNumber))),
           if (_user.maritalStatus == 'Married')
             _subDrop('Looking for', _user.marriageNumber ?? '',
@@ -397,9 +435,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               _subField('Sons', _boysCtrl, type: TextInputType.number),
               _subField('Daughters', _girlsCtrl, type: TextInputType.number),
             ]),
-          _drop('Open to Polygamy?', _user.openToPolygamy ?? '', ['Yes', 'No'],
-              (v) => setState(() => _user = _user.copyWith(openToPolygamy: v.isEmpty ? null : v)),
-              infoText: 'Polygamy means having more than one wife or marrying a man who already has a wife.'),
+
           _multiField('About Yourself', _aboutCtrl, maxLength: 200),
           _multiField('Looking For', _lookingForCtrl, maxLength: 200),
 
@@ -591,6 +627,66 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
   // ── Read-only profile view (same style as Review Proposal screen) ──────────
 
+  // Phone row: label | [call] [whatsapp] | number (right)
+  Widget _pPhoneRow(String label, String phone) {
+    final s = _S.of(context);
+    final cleaned = phone.replaceAll(RegExp(r'[\s\-()]'), '');
+    final waNumber = cleaned.startsWith('+92')
+        ? cleaned.substring(1)
+        : cleaned.startsWith('92')
+            ? cleaned
+            : cleaned.startsWith('0')
+                ? '92${cleaned.substring(1)}'
+                : '92$cleaned';
+    final dialPhone = cleaned.startsWith('+') ? cleaned : '+$cleaned';
+
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: s.s(7)),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        // Label
+        SizedBox(width: s.d(90), child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: s.f(12.5)))),
+        Expanded(
+          child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            // Call icon
+            GestureDetector(
+              onTap: () async {
+                try { await launchUrl(Uri(scheme: 'tel', path: dialPhone)); } catch (_) {}
+              },
+              child: Container(
+                padding: EdgeInsets.all(s.s(5)),
+                decoration: BoxDecoration(color: Colors.green.withOpacity(0.18), borderRadius: BorderRadius.circular(7)),
+                child: Icon(Icons.call_rounded, size: s.d(15), color: Colors.greenAccent),
+              ),
+            ),
+            SizedBox(width: s.s(5)),
+            // WhatsApp icon
+            GestureDetector(
+              onTap: () async {
+                try {
+                  await launchUrl(Uri.parse('https://wa.me/$waNumber'),
+                      mode: LaunchMode.externalApplication);
+                } catch (_) {}
+              },
+              child: Container(
+                padding: EdgeInsets.all(s.s(5)),
+                decoration: BoxDecoration(color: const Color(0xFF25D366).withOpacity(0.18), borderRadius: BorderRadius.circular(7)),
+                child: SvgPicture.asset('assets/icons/whatsapp.svg',
+                    width: s.d(15), height: s.d(15)),
+              ),
+            ),
+            SizedBox(width: s.s(6)),
+            // Phone number right next to icons
+            Flexible(child: Text(phone,
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: s.f(13)),
+                textAlign: TextAlign.right, overflow: TextOverflow.ellipsis)),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+
   Widget _pR(String label, String value, {double? labelWidth}) {
     final s = _S.of(context);
     return Padding(
@@ -713,8 +809,10 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           _pR('Age', u.age.toString()),
           _pR('Gender', u.gender),
           _pR('Height', heightLabel),
-          if (!u.contactPhone.startsWith('unknown_')) _pR('Phone', u.contactPhone),
-          if (u.contactPhone2 != null && u.contactPhone2!.isNotEmpty) _pR('Phone 2', u.contactPhone2!),
+          if (!u.contactPhone.startsWith('unknown_'))
+            _pPhoneRow('Phone', u.contactPhone),
+          if (u.contactPhone2 != null && u.contactPhone2!.isNotEmpty)
+            _pPhoneRow('Phone 2', u.contactPhone2!),
           if (u.cnic != null && u.cnic!.isNotEmpty) _pR('CNIC', u.cnic!),
           if (u.password != null && u.password!.isNotEmpty) _pR('Password', u.password!),
           if (u.country != null && u.country!.isNotEmpty) _pR('Country', u.country!),
@@ -733,7 +831,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
             if (u.boys != null && u.boys! > 0) _pSub('Sons', u.boys.toString()),
             if (u.girls != null && u.girls! > 0) _pSub('Daughters', u.girls.toString()),
           ],
-          if (u.openToPolygamy != null && u.openToPolygamy!.isNotEmpty) _pR('Open to Polygamy?', u.openToPolygamy!),
+
           if (u.about != null && u.about!.isNotEmpty) _pR('About', u.about!),
           if (u.lookingFor != null && u.lookingFor!.isNotEmpty) _pR('Looking For', u.lookingFor!),
 
@@ -1292,10 +1390,10 @@ class _AdminEditCitySheetState extends State<_AdminEditCitySheet> {
   final _ctrl = TextEditingController();
 
   Map<String, List<String>> get _filtered {
-    if (_query.isEmpty) return kCitiesGrouped;
+    if (_query.isEmpty) return SupabaseService.instance.citiesGrouped;
     final q = _query.toLowerCase();
     final result = <String, List<String>>{};
-    for (final entry in kCitiesGrouped.entries) {
+    for (final entry in SupabaseService.instance.citiesGrouped.entries) {
       final matches = entry.value.where((v) => v.toLowerCase().contains(q)).toList();
       if (matches.isNotEmpty) result[entry.key] = matches;
     }

@@ -43,6 +43,7 @@ class _AdminTestimonialsScreenState extends State<AdminTestimonialsScreen> {
   VoidCallback? _refreshStories;
   VoidCallback? _refreshBlog;
   VoidCallback? _refreshAds;
+  VoidCallback? _refreshData;
 
   @override
   void initState() {
@@ -68,6 +69,8 @@ class _AdminTestimonialsScreenState extends State<AdminTestimonialsScreen> {
           AdminBlogCard(onRefreshCallback: (cb) => _refreshBlog = cb),
           const SizedBox(height: 16),
           AdminAdsCard(onRefreshCallback: (cb) => _refreshAds = cb),
+          const SizedBox(height: 16),
+          const DataManagementCard(),
         ]),
       ),
     );
@@ -634,5 +637,298 @@ class _Field extends StatelessWidget {
         ),
       ),
     ]);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Data Management Card — Castes, Cities, Occupations
+//  Lets admin add/delete entries directly from the app. All three apps
+//  (user app, admin app, website) fetch from the same DB tables so changes
+//  reflect everywhere automatically on next refresh.
+// ══════════════════════════════════════════════════════════════════════════════
+
+class DataManagementCard extends StatefulWidget {
+  const DataManagementCard({super.key});
+  @override State<DataManagementCard> createState() => _DataManagementCardState();
+}
+
+class _DataManagementCardState extends State<DataManagementCard> {
+  bool _cardExpanded = false;
+  int _tab = 0; // 0=Castes 1=Cities 2=Occupations
+
+  // Data
+  List<Map<String, dynamic>> _castes      = [];
+  List<Map<String, dynamic>> _cities      = [];
+  List<Map<String, dynamic>> _occupations = [];
+  bool _loading = false;
+
+  // Groups
+  static const _casteGroups = ['Punjab','Sindh','KPK / Pashtun','Kashmir & Northern','Balochistan','Urdu-speaking / Muhajir','General'];
+  static const _cityProvinces = ['Punjab','Sindh','KPK','Balochistan','Islamabad','Gilgit Baltistan','Azad Kashmir'];
+  static const _occCategories = ['Healthcare','Engineering','IT & Tech','Education','Finance & Law','Business & Management','Government & Forces','Arts & Media','Skilled Trades','Services & Other','Other'];
+
+  @override
+  void initState() { super.initState(); _load(); }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+    try {
+      final results = await Future.wait([
+        _db.from('castes').select().order('group_order').order('sort_order'),
+        _db.from('cities').select().order('sort_order'),
+        _db.from('occupations').select().order('sort_order'),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _castes      = List<Map<String, dynamic>>.from(results[0]);
+        _cities      = List<Map<String, dynamic>>.from(results[1]);
+        _occupations = List<Map<String, dynamic>>.from(results[2]);
+        _loading = false;
+      });
+    } catch (_) { if (mounted) setState(() => _loading = false); }
+  }
+
+  Future<void> _delete(String table, dynamic id) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1A35),
+        title: const Text('Delete entry?', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+        content: const Text('This removes it from the dropdown. Existing profiles with this value are unaffected.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete', style: TextStyle(color: kRose, fontWeight: FontWeight.w700))),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _db.from(table).delete().eq('id', id);
+    _load();
+    SupabaseService.instance.fetchCastes();
+    SupabaseService.instance.fetchCities();
+    SupabaseService.instance.fetchOccupations();
+  }
+
+  void _showAddDialog() {
+    final names = ['Castes', 'Cities', 'Occupations'];
+    final tables = ['castes', 'cities', 'occupations'];
+    final groups = [_casteGroups, _cityProvinces, _occCategories];
+    final groupLabels = ['Group', 'Province', 'Category'];
+    final table = tables[_tab];
+    final groupList = groups[_tab];
+    final groupLabel = groupLabels[_tab];
+
+    String name = '';
+    String group = groupList.first;
+    final formKey = GlobalKey<FormState>();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          backgroundColor: const Color(0xFF1E1A35),
+          title: Text('Add to ${names[_tab]}', style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+          content: Form(
+            key: formKey,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextFormField(
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: 'Name',
+                  labelStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white.withOpacity(0.15)), borderRadius: BorderRadius.circular(8)),
+                  focusedBorder: OutlineInputBorder(borderSide: const BorderSide(color: kPurple), borderRadius: BorderRadius.circular(8)),
+                  filled: true, fillColor: Colors.white.withOpacity(0.05),
+                ),
+                validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
+                onChanged: (v) => name = v,
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: group,
+                dropdownColor: const Color(0xFF1E1A35),
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  labelText: groupLabel,
+                  labelStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white.withOpacity(0.15)), borderRadius: BorderRadius.circular(8)),
+                  focusedBorder: OutlineInputBorder(borderSide: const BorderSide(color: kPurple), borderRadius: BorderRadius.circular(8)),
+                  filled: true, fillColor: Colors.white.withOpacity(0.05),
+                ),
+                items: groupList.map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
+                onChanged: (v) { if (v != null) setS(() => group = v); },
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+            TextButton(
+              onPressed: () async {
+                if (!(formKey.currentState?.validate() ?? false)) return;
+                Navigator.pop(ctx);
+                // Confirmation
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    backgroundColor: const Color(0xFF1E1A35),
+                    title: Text('Add "${name.trim()}"?', style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                    content: Text('This will add it to the $group group and make it available in all apps immediately.',
+                        style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+                      TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Add', style: TextStyle(color: kPurple, fontWeight: FontWeight.w800))),
+                    ],
+                  ),
+                );
+                if (confirmed != true) return;
+                final Map<String, dynamic> row;
+                if (table == 'castes') {
+                  row = {'name': name.trim(), 'group_name': group, 'sort_order': 99, 'group_order': _casteGroups.indexOf(group) + 1};
+                } else if (table == 'cities') {
+                  row = {'name': name.trim(), 'province': group, 'sort_order': 99};
+                } else {
+                  row = {'name': name.trim(), 'category': group, 'sort_order': 99};
+                }
+                await _db.from(table).insert(row);
+                _load();
+                SupabaseService.instance.fetchCastes();
+                SupabaseService.instance.fetchCities();
+                SupabaseService.instance.fetchOccupations();
+              },
+              child: const Text('Add', style: TextStyle(color: kPurple, fontWeight: FontWeight.w800)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = [_castes, _cities, _occupations][_tab];
+    final groupKey = ['group_name', 'province', 'category'][_tab];
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final item in items) {
+      final g = item[groupKey] as String? ?? 'Other';
+      grouped.putIfAbsent(g, () => []).add(item);
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF16132A),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: Column(children: [
+        // Header
+        InkWell(
+          onTap: () => setState(() => _cardExpanded = !_cardExpanded),
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            child: Row(children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: kPurple.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+                child: const Icon(Icons.tune_rounded, color: kPurple, size: 20),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Data Management', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white)),
+                Text('Castes · Cities · Occupations', style: TextStyle(fontSize: 12, color: Colors.white38)),
+              ])),
+              Icon(_cardExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                  color: Colors.white38, size: 22),
+            ]),
+          ),
+        ),
+
+        if (_cardExpanded) ...[
+          Divider(height: 1, color: Colors.white.withOpacity(0.07)),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(children: [
+              // Tab selector
+              Container(
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(10)),
+                child: Row(children: ['Castes', 'Cities', 'Occupations'].asMap().entries.map((e) {
+                  final selected = _tab == e.key;
+                  return Expanded(child: GestureDetector(
+                    onTap: () => setState(() => _tab = e.key),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      decoration: BoxDecoration(
+                        color: selected ? kPurple : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(e.value, textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                              color: selected ? Colors.white : Colors.white38)),
+                    ),
+                  ));
+                }).toList()),
+              ),
+              const SizedBox(height: 14),
+
+              // Add button
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text('${items.length} entries', style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.4))),
+                TextButton.icon(
+                  onPressed: _showAddDialog,
+                  icon: const Icon(Icons.add_rounded, size: 16, color: kPurple),
+                  label: const Text('Add New', style: TextStyle(color: kPurple, fontWeight: FontWeight.w700, fontSize: 13)),
+                  style: TextButton.styleFrom(
+                    backgroundColor: kPurple.withOpacity(0.12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 10),
+
+              if (_loading)
+                const Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator(color: kPurple))
+              else
+                ...grouped.entries.map((group) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8, bottom: 6),
+                      child: Text(group.key.toUpperCase(),
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800,
+                              color: kPurple.withOpacity(0.8), letterSpacing: 0.8)),
+                    ),
+                    ...group.value.map((item) => Container(
+                      margin: const EdgeInsets.only(bottom: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.04),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.white.withOpacity(0.06)),
+                      ),
+                      child: Row(children: [
+                        Expanded(child: Text(item['name'] as String? ?? '',
+                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600))),
+                        GestureDetector(
+                          onTap: () => _delete(
+                            ['castes','cities','occupations'][_tab],
+                            item['id'],
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(color: kRose.withOpacity(0.12), borderRadius: BorderRadius.circular(6)),
+                            child: const Icon(Icons.delete_outline_rounded, size: 15, color: kRose),
+                          ),
+                        ),
+                      ]),
+                    )),
+                  ],
+                )),
+            ]),
+          ),
+        ],
+      ]),
+    );
   }
 }
