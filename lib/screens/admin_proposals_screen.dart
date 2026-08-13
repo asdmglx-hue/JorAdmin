@@ -350,7 +350,11 @@ class _ApprovedCard extends StatelessWidget {
           ),
           SizedBox(height: _S.of(context).s(12)),
           _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
-          _DetailRow(icon: Icons.calendar_today_rounded, label: 'Approved ${_timeAgo(user.subscriptionStart ?? user.postedAt)}'),
+          _DetailRow(
+            icon: Icons.calendar_today_rounded,
+            label: 'Approved ${_timeAgo(user.subscriptionStart ?? user.postedAt)}'
+                '${user.submissionSource == 'android' ? ' · Android App' : user.submissionSource == 'website' ? ' · Website' : ''}',
+          ),
           SizedBox(height: _S.of(context).s(12)),
           _ActBtn(
             label: 'Edit Profile',
@@ -389,15 +393,6 @@ class _PendingCard extends StatelessWidget {
     if (months < 12) return '${months}mo ago';
     final years = (days / 365).floor();
     return '${years}y ago';
-  }
-
-  // Empty string for proposals submitted before this column existed
-  // (null) — the "Submitted X ago" label just reads normally on its
-  // own in that case, rather than showing a broken/unknown source.
-  String _sourceLabel(String? source) {
-    if (source == 'android_app') return ' via Android App';
-    if (source == 'website') return ' via Website';
-    return '';
   }
 
   @override
@@ -539,7 +534,11 @@ class _PendingCard extends StatelessWidget {
           ),
           SizedBox(height: _S.of(context).s(12)),
           _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
-          _DetailRow(icon: Icons.calendar_today_rounded, label: 'Submitted ${_timeAgo(user.postedAt)}${_sourceLabel(user.submissionSource)}'),
+          _DetailRow(
+            icon: Icons.calendar_today_rounded,
+            label: 'Submitted ${_timeAgo(user.postedAt)}'
+                '${user.submissionSource == 'android' ? ' via Android App' : user.submissionSource == 'website' ? ' via Website' : ''}',
+          ),
           if (user.appliedCouponCode != null && user.appliedCouponCode!.isNotEmpty) ...[
             SizedBox(height: _S.of(context).s(4)),
             Container(

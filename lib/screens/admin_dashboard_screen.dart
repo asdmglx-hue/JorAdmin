@@ -521,8 +521,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   gradient: const LinearGradient(colors: [kPurple, kPurpleDeep]),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Center(child: Text('J',
-                  style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w900))),
+                child: const Center(child: Icon(Icons.person_rounded, color: Colors.white, size: 18)),
               ),
               const SizedBox(width: 10),
               const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

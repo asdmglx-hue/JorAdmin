@@ -238,7 +238,6 @@ class AdminUser {
   final String? hasDisability;
   final String? physicallyActive;
   final DateTime postedAt;
-  final String? submissionSource; // 'android_app' or 'website', null for older proposals
 
   final ProposalStatus status;
   final SubscriptionTier subscriptionTier;
@@ -264,6 +263,7 @@ class AdminUser {
   final String? guardianCnicBack;
   final String? educationDocument;
   final String? appliedCouponCode;
+  final String? submissionSource; // 'website' | 'android' | null (legacy/admin-imported)
 
   AdminUser({this.proposalNumber,
     required this.id, required this.name, required this.age, required this.gender,
@@ -282,7 +282,7 @@ class AdminUser {
     this.lookingFor, this.about, required this.contactPhone, this.contactPhone2,
     this.phoneVerified = false, this.emailVerified = false, this.cnicVerified = false,
     this.cnic, this.password, this.smokes, this.drinks, this.monthlyIncome, this.hasDisability,
-    this.physicallyActive, required this.postedAt, this.submissionSource,
+    this.physicallyActive, required this.postedAt,
     this.status = ProposalStatus.pending,
     this.subscriptionTier = SubscriptionTier.none,
     this.subscriptionStatus = SubscriptionStatus.inactive,
@@ -291,7 +291,7 @@ class AdminUser {
     this.featuredSchedule = const [], this.activationCode, this.pendingFeaturedTokens = 0,
     this.deletedFrom, this.deletionReason, this.adminNotes, this.registrationAllowed = false, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
     this.guardianCnicFront, this.guardianCnicBack, this.educationDocument,
-    this.appliedCouponCode,
+    this.appliedCouponCode, this.submissionSource,
   });
 
   factory AdminUser.fromJson(Map<String, dynamic> json) {
@@ -410,7 +410,6 @@ class AdminUser {
       hasDisability: json['has_disability'] == null ? null : (json['has_disability'] == true || json['has_disability'] == 'true' || json['has_disability'] == 'Yes' ? 'Yes' : 'No'),
       physicallyActive: json['physically_active']?.toString(),
       postedAt: json['posted_at'] != null ? DateTime.parse(json['posted_at'] as String) : DateTime.fromMillisecondsSinceEpoch(0),
-      submissionSource: json['submission_source'] as String?,
       status: status, subscriptionTier: tier, subscriptionStatus: subStatus,
       subscriptionStart: subStart,
       subscriptionExpiry: subExpiry,
@@ -431,6 +430,7 @@ class AdminUser {
       guardianCnicBack: json['guardian_cnic_back_url'] as String?,
       educationDocument: json['education_document_url'] as String?,
       appliedCouponCode: json['applied_coupon_code'] as String?,
+      submissionSource: json['submission_source'] as String?,
     );
   }
 
@@ -512,7 +512,7 @@ class AdminUser {
     int? pendingFeaturedTokens, String? deletedFrom, Object? deletionReason = _unset, String? adminNotes, bool? registrationAllowed,
     String? profilePhoto, Object? cnicFront = _unset, Object? cnicBack = _unset, String? password,
     Object? guardianCnicFront = _unset, Object? guardianCnicBack = _unset, Object? educationDocument = _unset,
-    String? appliedCouponCode,
+    String? appliedCouponCode, String? submissionSource,
   }) => AdminUser(
     id: id, name: name ?? this.name, age: age ?? this.age, gender: gender ?? this.gender,
     city: city ?? this.city,
@@ -570,6 +570,7 @@ class AdminUser {
     guardianCnicBack: guardianCnicBack is _Unset ? this.guardianCnicBack : guardianCnicBack as String?,
     educationDocument: educationDocument is _Unset ? this.educationDocument : educationDocument as String?,
     appliedCouponCode: appliedCouponCode ?? this.appliedCouponCode,
+    submissionSource: submissionSource ?? this.submissionSource,
   );
 }
 
