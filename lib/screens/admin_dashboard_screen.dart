@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -444,33 +445,171 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   Widget build(BuildContext context) {
     final svc = widget.adminService;
     // Force light status bar icons (white) for dark admin background
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    if (!kIsWeb) SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Color(0xFF0F0D1A),
       statusBarIconBrightness: Brightness.light,
     ));
+    final tabContent = IndexedStack(
+      index: _tab,
+      children: [
+        _DashboardHome(svc: svc, refreshKey: _refreshKey,
+          affiliateTrashCount: _affiliateTrashCount, affiliateTotalCount: svc.affiliateTotalCount),
+        AdminProposalsScreen(svc: svc),
+        AdminUsersScreen(svc: svc),
+        const AdminPricingScreen(),
+        AdminAffiliateScreen(onRegisterCallback: (cb) => _addAffiliate = cb, onRefreshCallback: (cb) => _refreshAffiliate = cb, onAffiliateDeleted: _loadAffiliateTrashCount),
+        AdminTestimonialsScreen(onRefreshCallback: (cb) => _refreshTestimonials = cb),
+      ],
+    );
+
+    // Web: sidebar layout. Mobile: bottom nav.
+    if (kIsWeb) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF0F0D1A),
+        body: Row(children: [
+          _buildSidebar(svc),
+          Expanded(
+            child: Column(children: [
+              _buildHeader(svc),
+              Expanded(child: tabContent),
+            ]),
+          ),
+        ]),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFF0F0D1A),
       body: SafeArea(
         child: Column(
           children: [
             _buildHeader(svc),
-            Expanded(
-              child: IndexedStack(
-                index: _tab,
-                children: [
-                  _DashboardHome(svc: svc, refreshKey: _refreshKey,
-                    affiliateTrashCount: _affiliateTrashCount, affiliateTotalCount: svc.affiliateTotalCount),
-                  AdminProposalsScreen(svc: svc),
-                  AdminUsersScreen(svc: svc),
-                  const AdminPricingScreen(),
-                  AdminAffiliateScreen(onRegisterCallback: (cb) => _addAffiliate = cb, onRefreshCallback: (cb) => _refreshAffiliate = cb, onAffiliateDeleted: _loadAffiliateTrashCount),
-                  AdminTestimonialsScreen(onRefreshCallback: (cb) => _refreshTestimonials = cb),
-                ],
-              ),
-            ),
+            Expanded(child: tabContent),
             _buildBottomNav(),
           ],
         ),
+      ),
+    );
+  }
+
+
+  // ── Web sidebar navigation ──────────────────────────────────────────────
+  Widget _buildSidebar(AdminService svc) {
+    const items = [
+      (Icons.dashboard_rounded, 'Dashboard'),
+      (Icons.shopping_cart_rounded, 'Orders'),
+      (Icons.people_rounded, 'Users'),
+      (Icons.attach_money_rounded, 'Pricing'),
+      (Icons.handshake_outlined, 'Affiliate'),
+      (Icons.format_quote_rounded, 'Content'),
+    ];
+    return Container(
+      width: 210,
+      decoration: const BoxDecoration(
+        color: Color(0xFF16132A),
+        border: Border(right: BorderSide(color: Color(0x12FFFFFF))),
+      ),
+      child: Column(
+        children: [
+          // Logo header
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+            child: Row(children: [
+              Container(
+                width: 30, height: 30,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [kPurple, kPurpleDeep]),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Center(child: Text('J',
+                  style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w900))),
+              ),
+              const SizedBox(width: 10),
+              const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Jor Admin', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w800)),
+                Text('admin.joronline.com', style: TextStyle(color: Color(0x55FFFFFF), fontSize: 9.5)),
+              ]),
+            ]),
+          ),
+          const Divider(color: Color(0x10FFFFFF), height: 1),
+          const SizedBox(height: 6),
+          // Nav items
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              itemCount: items.length,
+              itemBuilder: (_, i) {
+                final selected = _tab == i;
+                return MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() => _tab = i);
+                      if (i == 4) _loadAffiliateTrashCount();
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      margin: const EdgeInsets.only(bottom: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: selected ? kPurple.withOpacity(0.14) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        border: selected ? Border.all(color: kPurple.withOpacity(0.25)) : null,
+                      ),
+                      child: Row(children: [
+                        Stack(clipBehavior: Clip.none, children: [
+                          Icon(items[i].$1, size: 19,
+                            color: selected ? kPurple : Colors.white.withOpacity(0.4)),
+                          if (i == 1 && _pendingCount > 0)
+                            Positioned(right: -6, top: -4,
+                              child: Container(
+                                padding: const EdgeInsets.all(2),
+                                decoration: const BoxDecoration(color: kRose, shape: BoxShape.circle),
+                                constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
+                                child: Text(_pendingCount > 99 ? '99+' : '$_pendingCount',
+                                  style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w800),
+                                  textAlign: TextAlign.center),
+                              )),
+                        ]),
+                        const SizedBox(width: 11),
+                        Text(items[i].$2, style: TextStyle(
+                          color: selected ? kPurple : Colors.white.withOpacity(0.55),
+                          fontSize: 13, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+                      ]),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const Divider(color: Color(0x10FFFFFF), height: 1),
+          // Refresh + logout row
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(children: [
+              Expanded(
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    onTap: () => svc.loadData(),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.04),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Icon(Icons.refresh_rounded, color: Color(0x66FFFFFF), size: 16),
+                        SizedBox(width: 6),
+                        Text('Refresh', style: TextStyle(color: Color(0x66FFFFFF), fontSize: 11.5)),
+                      ]),
+                    ),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ],
       ),
     );
   }
@@ -712,7 +851,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                             decoration: const BoxDecoration(color: kRose, shape: BoxShape.circle),
                             constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
                             child: Text(
-                              _pendingCount > 99 ? '99+' : '$_pendingCount',
+                              _pendingCount > 99 ? '99+' : '${_pendingCount}',
                               style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800),
                               textAlign: TextAlign.center,
                             ),
@@ -830,12 +969,58 @@ class _DashboardHome extends StatelessWidget {
 
   /// A simple list of every completed month's frozen revenue — no picker,
   /// no range to get wrong, just "here's what each past month made."
+  Future<void> _addToCurrentMonthRevenue(BuildContext context) async {
+    final amountCtrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1A33),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Add to Current Month', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+        content: TextField(
+          controller: amountCtrl,
+          keyboardType: const TextInputType.numberWithOptions(signed: true),
+          autofocus: true,
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+          decoration: InputDecoration(
+            prefixText: 'Rs. ',
+            prefixStyle: const TextStyle(color: Colors.white54),
+            hintText: 'e.g. 500 or -500 to subtract',
+            hintStyle: const TextStyle(color: Colors.white24),
+            filled: true,
+            fillColor: Colors.white.withOpacity(0.05),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(_, false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          TextButton(onPressed: () => Navigator.pop(_, true), child: const Text('Add', style: TextStyle(color: kPurple, fontWeight: FontWeight.w800))),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final amount = double.tryParse(amountCtrl.text.trim());
+    if (amount == null || amount == 0) return;
+    final settings = await SupabaseService.instance.fetchAppSettings();
+    final monthlyOffset = double.tryParse(settings['monthly_revenue_deleted_offset'] ?? '0') ?? 0;
+    final allTimeOffset = double.tryParse(settings['deleted_users_revenue_offset'] ?? '0') ?? 0;
+    await Future.wait([
+      SupabaseService.instance.client.from('app_settings')
+          .upsert({'key': 'monthly_revenue_deleted_offset', 'value': (monthlyOffset + amount).toString()}),
+      SupabaseService.instance.client.from('app_settings')
+          .upsert({'key': 'deleted_users_revenue_offset', 'value': (allTimeOffset + amount).toString()}),
+    ]);
+    svc.loadData();
+  }
+
   Future<void> _showRevenueHistory(BuildContext context) async {
-    final future = SupabaseService.instance.fetchMonthlyRevenueHistory();
+    var future = SupabaseService.instance.fetchMonthlyRevenueHistory();
 
     await showDialog(
       context: context,
-      builder: (ctx) => Dialog(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setHistoryState) => Dialog(
         backgroundColor: const Color(0xFF1E1A33),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Padding(
@@ -876,13 +1061,82 @@ class _DashboardHome extends StatelessWidget {
                         final y = r['year'] as int;
                         final m = r['month'] as int;
                         final revenue = (r['total_revenue'] as num?)?.toDouble() ?? 0;
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          child: Row(children: [
-                            Text('${_monthNames[m]} $y', style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600)),
-                            const Spacer(),
-                            Text('Rs. ${revenue.toInt()}', style: const TextStyle(color: kGreen, fontSize: 13.5, fontWeight: FontWeight.w800)),
-                          ]),
+                        final revenueCtrl = TextEditingController(text: revenue.toInt().toString());
+                        return GestureDetector(
+                          onTap: () async {
+                                revenueCtrl.text = revenue.toInt().toString();
+                                final confirmed = await showDialog<bool>(
+                                  context: context,
+                                  builder: (_) => AlertDialog(
+                                    backgroundColor: const Color(0xFF1E1A33),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                    title: Text('Edit ${_monthNames[m]} $y', style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                                    content: TextField(
+                                      controller: revenueCtrl,
+                                      keyboardType: TextInputType.number,
+                                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                                      decoration: InputDecoration(
+                                        prefixText: 'Rs. ',
+                                        prefixStyle: const TextStyle(color: Colors.white54),
+                                        filled: true,
+                                        fillColor: Colors.white.withOpacity(0.05),
+                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                      ),
+                                    ),
+                                    actions: [
+                                      TextButton(onPressed: () => Navigator.pop(_, false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+                                      TextButton(onPressed: () => Navigator.pop(_, true), child: const Text('Save', style: TextStyle(color: kPurple, fontWeight: FontWeight.w800))),
+                                    ],
+                                  ),
+                                );
+                                if (confirmed != true) return;
+                                final newVal = double.tryParse(revenueCtrl.text.trim());
+                                if (newVal == null) return;
+                                final delta = newVal - revenue;
+                                final s2 = await SupabaseService.instance.fetchAppSettings();
+                                final allTimeOffset2 = double.tryParse(s2['deleted_users_revenue_offset'] ?? '0') ?? 0;
+                                final now2 = DateTime.now();
+                                final isCurrentMonth = y == now2.year && m == now2.month;
+                                final monthlyOffset2 = double.tryParse(s2['monthly_revenue_deleted_offset'] ?? '0') ?? 0;
+                                try {
+                                  debugPrint('[REV] Saving year=$y month=$m newVal=$newVal');
+                                  final res = await SupabaseService.instance.client
+                                      .from('monthly_revenue_log')
+                                      .update({'total_revenue': newVal})
+                                      .eq('year', y)
+                                      .eq('month', m)
+                                      .select();
+                                  debugPrint('[REV] Update result: $res');
+                                  final s3 = await SupabaseService.instance.fetchAppSettings();
+                                  final allTimeOffset2 = double.tryParse(s3['deleted_users_revenue_offset'] ?? '0') ?? 0;
+                                  await SupabaseService.instance.client.from('app_settings')
+                                      .upsert({'key': 'deleted_users_revenue_offset', 'value': (allTimeOffset2 + delta).toString()});
+                                  if (isCurrentMonth) {
+                                    final monthlyOffset2 = double.tryParse(s3['monthly_revenue_deleted_offset'] ?? '0') ?? 0;
+                                    await SupabaseService.instance.client.from('app_settings')
+                                        .upsert({'key': 'monthly_revenue_deleted_offset', 'value': (monthlyOffset2 + delta).toString()});
+                                  }
+                                } catch (e, st) {
+                                  debugPrint('[REV] ERROR: $e');
+                                  debugPrint('[REV] STACK: $st');
+                                }
+                                svc.loadData();
+                                // Refresh data inside popup without closing
+                                setHistoryState(() {
+                                  future = SupabaseService.instance.fetchMonthlyRevenueHistory();
+                                });
+                              },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            child: Row(children: [
+                              Text('${_monthNames[m]} $y', style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600)),
+                              const Spacer(),
+                              Text('Rs. ${revenue.toInt()}', style: const TextStyle(color: kGreen, fontSize: 13.5, fontWeight: FontWeight.w800)),
+                              const SizedBox(width: 6),
+                              const Icon(Icons.chevron_right_rounded, size: 16, color: Colors.white24),
+                            ]),
+                          ),
                         );
                       },
                     );
@@ -890,19 +1144,49 @@ class _DashboardHome extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: GestureDetector(
-                  onTap: () => Navigator.pop(ctx),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
-                    child: const Center(child: Text('Close', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 13))),
+              Row(children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.pop(ctx),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
+                      child: const Center(child: Text('Close', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 13))),
+                    ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () async {
+                      final confirmed = await showDialog<bool>(
+                        context: ctx,
+                        builder: (_) => AlertDialog(
+                          backgroundColor: const Color(0xFF1E1A33),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          title: const Text('Clear Revenue History?', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                          content: const Text('This will permanently delete all monthly revenue records. This cannot be undone.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(_, false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+                            TextButton(onPressed: () => Navigator.pop(_, true), child: const Text('Clear', style: TextStyle(color: kRose, fontWeight: FontWeight.w800))),
+                          ],
+                        ),
+                      );
+                      if (confirmed != true) return;
+                      await SupabaseService.instance.client.from('monthly_revenue_log').delete().gte('year', 0);
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(color: kRose.withOpacity(0.1), borderRadius: BorderRadius.circular(10), border: Border.all(color: kRose.withOpacity(0.3))),
+                      child: const Center(child: Text('Clear History', style: TextStyle(color: kRose, fontWeight: FontWeight.w600, fontSize: 13))),
+                    ),
+                  ),
+                ),
+              ]),
             ],
           ),
+        ),
         ),
       ),
     );
@@ -977,9 +1261,7 @@ class _DashboardHome extends StatelessWidget {
           )),
           SizedBox(width: s.s(12)),
           Expanded(
-            child: GestureDetector(
-              onTap: () => _showRevenueHistory(context),
-              child: Container(
+            child: Container(
                 padding: EdgeInsets.all(s.s(16)),
                 decoration: BoxDecoration(
                   color: const Color(0xFF16132A),
@@ -987,7 +1269,7 @@ class _DashboardHome extends StatelessWidget {
                   border: Border.all(color: Colors.white.withOpacity(0.07)),
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Container(
                       width: s.d(40), height: s.d(40),
                       decoration: BoxDecoration(
@@ -998,10 +1280,25 @@ class _DashboardHome extends StatelessWidget {
                         color: _monthlyRevenue > 0 ? kGreen : Colors.white24, size: s.d(22)),
                     ),
                     const Spacer(),
-                    Transform.translate(
-                      offset: const Offset(0, -10),
-                      child: Icon(Icons.history_rounded, size: s.d(14), color: kPurple),
-                    ),
+                    Row(children: [
+                      GestureDetector(
+                        onTap: () => _addToCurrentMonthRevenue(context),
+                        child: Container(
+                          padding: EdgeInsets.all(s.s(6)),
+                          decoration: BoxDecoration(color: kPurple.withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(8))),
+                          child: Icon(Icons.add_rounded, size: s.d(18), color: kPurple),
+                        ),
+                      ),
+                      SizedBox(width: s.s(6)),
+                      GestureDetector(
+                        onTap: () => _showRevenueHistory(context),
+                        child: Container(
+                          padding: EdgeInsets.all(s.s(6)),
+                          decoration: BoxDecoration(color: kPurple.withOpacity(0.08), borderRadius: BorderRadius.circular(s.s(8))),
+                          child: Icon(Icons.history_rounded, size: s.d(18), color: kPurple.withOpacity(0.6)),
+                        ),
+                      ),
+                    ]),
                   ]),
                   SizedBox(height: s.s(12)),
                   _CountUp(
@@ -1019,7 +1316,6 @@ class _DashboardHome extends StatelessWidget {
                 ]),
               ),
             ),
-          ),
         ]),
         SizedBox(height: s.s(24)),
         Text('User Breakdown', style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w700, color: Colors.white)),
@@ -1193,6 +1489,20 @@ class _StatusBreakdown extends StatelessWidget {
     final totalCities    = localCitySet.length;
     final totalCountries = countrySet.length;
 
+    // Local vs Overseas
+    final localCount = users.where((u) =>
+      u.status != ProposalStatus.deleted &&
+      u.status != ProposalStatus.pending &&
+      u.subscriptionStatus != SubscriptionStatus.expired &&
+      (u.country == null || u.country!.isEmpty || u.country!.toLowerCase() == 'pakistan')
+    ).length;
+    final overseasCount = users.where((u) =>
+      u.status != ProposalStatus.deleted &&
+      u.status != ProposalStatus.pending &&
+      u.subscriptionStatus != SubscriptionStatus.expired &&
+      u.country != null && u.country!.isNotEmpty && u.country!.toLowerCase() != 'pakistan'
+    ).length;
+
     final row1 = [('Active', active), ('Inactive', inactive), ('Paused', paused), ('Featured', featured)];
     final row2 = [('Pending', pending), ('Rejected', rejected), ('Removed', removed), ('Affiliate', affiliate)];
     final row3 = [('Male', activeMale), ('Female', activeFemale), ('Cities', totalCities), ('Countries', totalCountries)];
@@ -1224,6 +1534,36 @@ class _StatusBreakdown extends StatelessWidget {
         Container(height: 1, color: Colors.white.withOpacity(0.07)),
         SizedBox(height: sc.s(14)),
         Row(children: row3.map((t) => cell(t.$1, t.$2)).toList()),
+        SizedBox(height: sc.s(14)),
+        Container(height: 1, color: Colors.white.withOpacity(0.07)),
+        SizedBox(height: sc.s(14)),
+        FutureBuilder<List<int>>(
+          future: Future.wait([
+            SupabaseService.instance.client.from('coupon_codes').select('id').then((r) => (r as List).length),
+            SupabaseService.instance.client.from('ads').select('id').then((r) => (r as List).length),
+          ]),
+          builder: (_, snap) {
+            final d = snap.data ?? [0, 0];
+            return Row(children: [cell('Local', localCount), cell('Overseas', overseasCount), cell('Coupons', d[0]), cell('Ads', d[1])]);
+          },
+        ),
+        SizedBox(height: sc.s(14)),
+        Container(height: 1, color: Colors.white.withOpacity(0.07)),
+        SizedBox(height: sc.s(14)),
+        FutureBuilder<List<int>>(
+          future: Future.wait([
+            // Edit requests: count distinct proposals with at least one 'applied' field
+            SupabaseService.instance.client.from('profile_edit_requests').select('proposal_id').eq('status', 'applied')
+                .then((r) => (r as List).map((e) => e['proposal_id']).toSet().length),
+            SupabaseService.instance.client.from('profile_reports').select('id').eq('status', 'pending').then((r) => (r as List).length),
+            SupabaseService.instance.client.from('cnic_verification_requests').select('id').eq('status', 'pending').then((r) => (r as List).length),
+            SupabaseService.instance.client.from('admin_accounts').select('id').then((r) => (r as List).length),
+          ]),
+          builder: (_, snap) {
+            final d = snap.data ?? [0, 0, 0, 0];
+            return Row(children: [cell('Review', d[0]), cell('Report', d[1]), cell('Verify', d[2]), cell('Admins', d[3])]);
+          },
+        ),
       ]),
     );
   }
@@ -1458,7 +1798,7 @@ class _EditRequestsHeaderBadgeState extends State<_EditRequestsHeaderBadge> {
         metaByProposal[pid] = (r['proposals'] as Map<String, dynamic>?) ?? {};
       }
 
-      final count = byProposal.entries
+      final editCount = byProposal.entries
           .map((entry) => EditRequest.build(
                 proposalId: entry.key,
                 rows: entry.value,
@@ -1467,7 +1807,29 @@ class _EditRequestsHeaderBadgeState extends State<_EditRequestsHeaderBadge> {
           .where((req) => req.hasPending)
           .length;
 
-      if (mounted) setState(() => _pendingCount = count);
+      // Collective count now — pending edits, reports, AND CNIC
+      // verification requests together, since this one icon is the
+      // entry point for all three (via the Review/Report/Verify toggle
+      // inside AdminEditRequestsScreen).
+      int reportCount = 0;
+      try {
+        final reportData = await Supabase.instance.client
+            .from('profile_reports')
+            .select('id')
+            .eq('status', 'pending');
+        reportCount = (reportData as List).length;
+      } catch (_) {}
+
+      int verificationCount = 0;
+      try {
+        final verificationData = await Supabase.instance.client
+            .from('cnic_verification_requests')
+            .select('id')
+            .eq('status', 'pending');
+        verificationCount = (verificationData as List).length;
+      } catch (_) {}
+
+      if (mounted) setState(() => _pendingCount = editCount + reportCount + verificationCount);
     } catch (_) {}
   }
 
@@ -1496,7 +1858,7 @@ class _EditRequestsHeaderBadgeState extends State<_EditRequestsHeaderBadge> {
                 color: kRose, borderRadius: BorderRadius.circular(s.s(10)),
                 border: Border.all(color: const Color(0xFF0F0D1E), width: 1.5),
               ),
-              child: Text('$_pendingCount',
+              child: Text('${_pendingCount}',
                 style: TextStyle(color: Colors.white, fontSize: s.f(9), fontWeight: FontWeight.w800)),
             ),
           ),

@@ -1,5 +1,4 @@
 import 'dart:math';
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -419,7 +418,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
                         builder: (_) => AlertDialog(
                           backgroundColor: _kCard,
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                          title: const Text('Confirm Payment', style: TextStyle(color: _kText, fontWeight: FontWeight.w800)),
+                          title: const Text('Confirm Payment', style: TextStyle(color: _kText, fontSize: 15, fontWeight: FontWeight.w800)),
                           content: Text("Mark ${unpaidSelected.length} referral(s) as paid? Total: Rs $totalAmt", style: const TextStyle(color: _kSub, fontSize: 13)),
                           actions: [
                             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel', style: TextStyle(color: _kFaint))),
@@ -510,7 +509,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
           const SizedBox(height: 16),
           ListTile(
             leading: Icon(isCenter ? Icons.storefront_outlined : Icons.storefront_rounded, color: kPurple),
-            title: Text(isCenter ? 'Remove from Center' : 'Add as Center', style: const TextStyle(color: _kText, fontWeight: FontWeight.w700)),
+            title: Text(isCenter ? 'Remove from Center' : 'Add as Center', style: const TextStyle(color: _kText, fontSize: 15, fontWeight: FontWeight.w700)),
             subtitle: Text(
               isCenter ? 'Will no longer be listed on the Help Center page' : 'Will be listed on the public Help Center page',
               style: const TextStyle(color: _kFaint, fontSize: 12),
@@ -815,7 +814,7 @@ class _AddAffiliateSheetState extends State<_AddAffiliateSheet> {
     final picker = ImagePicker();
     final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85, maxWidth: 1600);
     if (picked == null) return;
-    final bytes = await File(picked.path).readAsBytes();
+    final bytes = await picked.readAsBytes();
     setState(() {
       if (isFront) { _cnicFrontBytes = bytes; } else { _cnicBackBytes = bytes; }
     });

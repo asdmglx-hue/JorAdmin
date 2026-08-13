@@ -551,7 +551,7 @@ class _TrashCard extends StatelessWidget {
                       SizedBox(height: s.s(4)),
                       Text(
                         (user.cnic != null && user.cnic!.isNotEmpty)
-                            ? user.cnic!
+                            ? formatCnicDisplay(user.cnic!)
                             : user.contactPhone,
                         style: TextStyle(fontSize: s.f(12), color: Colors.white.withOpacity(0.35)),
                         maxLines: 1, overflow: TextOverflow.ellipsis,

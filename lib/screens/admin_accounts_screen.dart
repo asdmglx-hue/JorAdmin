@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../models/admin_models.dart';
+import 'admin_edit_user_screen.dart'; // formatCnicDisplay
 
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
@@ -93,7 +94,7 @@ class _AdminAccountsScreenState extends State<AdminAccountsScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(16))),
         title: Text('Remove Admin?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: s.f(16))),
         content: Text(
-          '${account.name} (${account.cnic}) will no longer be able to log in with unlocked access.',
+          '${account.name} (${formatCnicDisplay(account.cnic)}) will no longer be able to log in with unlocked access.',
           style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: s.f(13)),
         ),
         actions: [
@@ -246,7 +247,7 @@ class _AdminAccountCard extends StatelessWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(account.name, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: s.f(14))),
             SizedBox(height: s.s(2)),
-            Text(account.cnic, style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: s.f(12), letterSpacing: 0.3)),
+            Text(formatCnicDisplay(account.cnic), style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: s.f(12), letterSpacing: 0.3)),
           ]),
         ),
         GestureDetector(

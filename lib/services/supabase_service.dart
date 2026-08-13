@@ -1,5 +1,5 @@
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:io';
+// dart:io removed for web compat
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
@@ -26,10 +26,11 @@ const _r2PublicUrl       = 'https://pub-45b25e06fb4b4f448d2ee349c6f55922.r2.dev'
 
 /// Result of validating a coupon code against the live coupon_codes table.
 class _CouponResolution {
-  final String type; // 'percentage' or 'free_days'
+  final String type; // 'percentage', 'free_days', or 'free_trial'
   final int? discountPercent;
   final int? freeDays;
-  _CouponResolution({required this.type, this.discountPercent, this.freeDays});
+  final int? trialDays;
+  _CouponResolution({required this.type, this.discountPercent, this.freeDays, this.trialDays});
 }
 
 class SupabaseService extends ChangeNotifier {
@@ -438,9 +439,9 @@ class SupabaseService extends ChangeNotifier {
   /// Returns the new proposal ID, or throws on error.
   Future<String> submitProposal({
     required Map<String, dynamic> proposalData,
-    File? profilePhotoFile,
-    File? cnicFrontFile,
-    File? cnicBackFile,
+    Uint8List? profilePhotoFile,
+    Uint8List? cnicFrontFile,
+    Uint8List? cnicBackFile,
   }) async {
     // Ensure NOT NULL columns always have a value even if form was skipped
     final safeData = Map<String, dynamic>.from(proposalData);
@@ -462,10 +463,10 @@ class SupabaseService extends ChangeNotifier {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final cnic = (safeData['cnic'] as String? ?? 'unknown').replaceAll('-', '');
 
-    Future<String?> _uploadPhoto(File? file, String type) async {
+    Future<String?> _uploadPhoto(Uint8List? file, String type) async {
       if (file == null) return null;
       try {
-        final bytes = await file.readAsBytes();
+        final bytes = file;
         final path = 'proposals/$cnic/${type}_$timestamp.jpg';
         final url = await _uploadToR2(bytes: bytes, path: path);
         debugPrint('✅ Uploaded $type photo: $url');
@@ -866,21 +867,21 @@ class SupabaseService extends ChangeNotifier {
   /// Admin import: insert proposal then upload photos to R2
   Future<void> addUserWithPhotos({
     required Map<String, dynamic> data,
-    File? profilePhoto,
-    File? cnicFront,
-    File? cnicBack,
-    File? degreeCertificate,
-    File? degreeCertificate2,
-    File? degreeCertificate3,
+    Uint8List? profilePhoto,
+    Uint8List? cnicFront,
+    Uint8List? cnicBack,
+    Uint8List? degreeCertificate,
+    Uint8List? degreeCertificate2,
+    Uint8List? degreeCertificate3,
   }) async {
     final res = await _client.from('proposals').insert(data).select('id').single();
     final id = res['id'] as String;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
 
-    Future<String?> _up(File? file, String type) async {
+    Future<String?> _up(Uint8List? file, String type) async {
       if (file == null) return null;
       try {
-        final bytes = await file.readAsBytes();
+        final bytes = file;
         final path = 'proposals/$id/${type}_$timestamp.jpg';
         return await _uploadToR2(bytes: bytes, path: path);
       } catch (e) {
@@ -952,7 +953,7 @@ class SupabaseService extends ChangeNotifier {
     try {
       final res = await _client
           .from('coupon_codes')
-          .select('coupon_type, discount_percent, free_days, active, expires_at')
+          .select('coupon_type, discount_percent, free_days, trial_days, active, expires_at')
           .ilike('code', code.trim())
           .maybeSingle();
       if (res == null) return null;
@@ -963,6 +964,7 @@ class SupabaseService extends ChangeNotifier {
         type: res['coupon_type'] as String? ?? 'percentage',
         discountPercent: (res['discount_percent'] as num?)?.toInt(),
         freeDays: (res['free_days'] as num?)?.toInt(),
+        trialDays: (res['trial_days'] as num?)?.toInt(),
       );
     } catch (_) {
       return null;
@@ -1084,7 +1086,11 @@ class SupabaseService extends ChangeNotifier {
     // expired since the user applied it), coupon is null and nothing here
     // changes — no discount, no error.
     if (coupon != null) {
-      if (coupon.type == 'free_days' && coupon.freeDays != null && coupon.freeDays! > 0) {
+      if (coupon.type == 'free_trial' && coupon.trialDays != null && coupon.trialDays! > 0) {
+        price = 0;
+        days = coupon.trialDays!;
+        debugPrint('[APPROVE] coupon=$appliedCouponCode free_trial -> price=0 days=$days');
+      } else if (coupon.type == 'free_days' && coupon.freeDays != null && coupon.freeDays! > 0) {
         final totalDays = days + coupon.freeDays!;
         debugPrint('[APPROVE] coupon=$appliedCouponCode free_days=${coupon.freeDays} added to plan days=$days -> total=$totalDays (price unchanged: $price)');
         days = totalDays;
@@ -1093,6 +1099,10 @@ class SupabaseService extends ChangeNotifier {
         debugPrint('[APPROVE] coupon=$appliedCouponCode discount=${coupon.discountPercent}% price $price -> $discounted');
         price = discounted;
       }
+      // Increment times_used on the coupon so admin can see how many times it was applied.
+      try {
+        await _client.rpc('increment_coupon_uses', params: {'coupon_code': appliedCouponCode});
+      } catch (_) { /* non-critical */ }
     }
 
     final expiry = DateTime.now().toUtc().add(Duration(days: days)).toIso8601String();
@@ -1496,8 +1506,7 @@ class SupabaseService extends ChangeNotifier {
   // ── Blog — cover image upload ─────────────────────────────────────────────
   // Same R2 bucket and signing already used for proposal/CNIC photos, just
   // under its own 'blog/' folder so cover images don't mix with user photos.
-  Future<String> uploadBlogCoverImage(File file, String pathHint) async {
-    final bytes = await file.readAsBytes();
+  Future<String> uploadBlogCoverImage(Uint8List bytes, String pathHint) async {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final safeHint = pathHint.replaceAll(RegExp(r'[^a-z0-9-]'), '');
     final path = 'blog/${safeHint.isEmpty ? 'cover' : safeHint}_$timestamp.jpg';

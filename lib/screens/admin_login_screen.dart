@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../utils/theme.dart';
@@ -23,11 +24,13 @@ class _S {
     final w = mq.size.width;
     final h = mq.size.height;
     final isTablet = w >= 600;
-    final isLandscape = mq.orientation == Orientation.landscape;
-    // Scale up for tablets, scale down for small phones, cap at 1.3 for large tablets
-    final scale = isTablet
-        ? (w / 390.0).clamp(1.0, 1.3)
-        : (w / 390.0).clamp(0.72, 1.0);
+    final isLandscape = kIsWeb || mq.orientation == Orientation.landscape;
+    // On web, always use a capped scale so login doesn't overflow
+    final scale = kIsWeb
+        ? 1.0
+        : isTablet
+            ? (w / 390.0).clamp(1.0, 1.3)
+            : (w / 390.0).clamp(0.72, 1.0);
     return _S(scale, isTablet: isTablet, isLandscape: isLandscape);
   }
 }
@@ -101,7 +104,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     if (!mounted) return;
 
     if (result == true) {
-      await FCMService.instance.saveAdminToken();
+      if (!kIsWeb) await FCMService.instance.saveAdminToken();
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -109,7 +112,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
         ),
       );
     } else {
-      HapticFeedback.heavyImpact();
+      if (!kIsWeb) HapticFeedback.heavyImpact();
       _shakeCtrl.forward(from: 0);
       setState(() {
         _hasError = true;
@@ -125,7 +128,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
   @override
   Widget build(BuildContext context) {
     final s = _S.of(context);
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    if (!kIsWeb) SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: kInk,
       statusBarIconBrightness: Brightness.light,
     ));
@@ -135,8 +138,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
-            // Cap width so tablets don't stretch the keypad wall-to-wall
-            constraints: const BoxConstraints(maxWidth: 480),
+            constraints: BoxConstraints(maxWidth: kIsWeb ? 700 : 480),
             child: s.isLandscape
                 ? _buildLandscapeLayout(s)
                 : _buildPortraitLayout(s),
@@ -318,10 +320,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
         _KeypadRow(digits: const ['7', '8', '9'], onKey: _onKey, s: s),
         SizedBox(height: s.s(10)),
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          mainAxisSize: MainAxisSize.min,
           children: [
             _BackButton(onTap: () => Navigator.pop(context), s: s),
+            SizedBox(width: s.s(8)),
             _KeypadButton(label: '0', onTap: () => _onKey('0'), s: s),
+            SizedBox(width: s.s(8)),
             _DeleteButton(onTap: _onDelete, s: s),
           ],
         ),
@@ -339,11 +343,19 @@ class _KeypadRow extends StatelessWidget {
       {required this.digits, required this.onKey, required this.s});
 
   @override
-  Widget build(BuildContext context) => Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children:
-            digits.map((d) => _KeypadButton(label: d, onTap: () => onKey(d), s: s)).toList(),
-      );
+  Widget build(BuildContext context) {
+    final gap = SizedBox(width: s.s(10));
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _KeypadButton(label: digits[0], onTap: () => onKey(digits[0]), s: s),
+        gap,
+        _KeypadButton(label: digits[1], onTap: () => onKey(digits[1]), s: s),
+        gap,
+        _KeypadButton(label: digits[2], onTap: () => onKey(digits[2]), s: s),
+      ],
+    );
+  }
 }
 
 class _KeypadButton extends StatefulWidget {

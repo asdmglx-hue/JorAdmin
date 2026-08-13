@@ -95,9 +95,10 @@ class AdminAccount {
 class CouponCode {
   final String id;
   final String code;
-  final String type; // 'percentage' or 'free_days'
+  final String type; // 'percentage', 'free_days', or 'free_trial'
   final int? discountPercent;
   final int? freeDays;
+  final int? trialDays;
   final bool active;
   final int timesUsed;
   final DateTime createdAt;
@@ -109,6 +110,7 @@ class CouponCode {
     required this.type,
     this.discountPercent,
     this.freeDays,
+    this.trialDays,
     required this.active,
     required this.timesUsed,
     required this.createdAt,
@@ -116,6 +118,7 @@ class CouponCode {
   });
 
   bool get isPercentage => type == 'percentage';
+  bool get isFreeTrial => type == 'free_trial';
   bool get isExpired => expiresAt != null && expiresAt!.isBefore(DateTime.now());
 
   factory CouponCode.fromJson(Map<String, dynamic> json) => CouponCode(
@@ -124,6 +127,7 @@ class CouponCode {
         type: json['coupon_type'] as String? ?? 'percentage',
         discountPercent: (json['discount_percent'] as num?)?.toInt(),
         freeDays: (json['free_days'] as num?)?.toInt(),
+        trialDays: (json['trial_days'] as num?)?.toInt(),
         active: json['active'] as bool? ?? true,
         timesUsed: (json['times_used'] as num?)?.toInt() ?? 0,
         createdAt: DateTime.parse(json['created_at'] as String),
@@ -234,6 +238,7 @@ class AdminUser {
   final String? hasDisability;
   final String? physicallyActive;
   final DateTime postedAt;
+  final String? submissionSource; // 'android_app' or 'website', null for older proposals
 
   final ProposalStatus status;
   final SubscriptionTier subscriptionTier;
@@ -249,11 +254,15 @@ class AdminUser {
   final String? deletedFrom;
   final String? deletionReason;
   final String? adminNotes;
+  final bool registrationAllowed;
   final String? discarded;
   final String? suggestedInfo;
   final String? profilePhoto;
   final String? cnicFront;
   final String? cnicBack;
+  final String? guardianCnicFront;
+  final String? guardianCnicBack;
+  final String? educationDocument;
   final String? appliedCouponCode;
 
   AdminUser({this.proposalNumber,
@@ -273,14 +282,15 @@ class AdminUser {
     this.lookingFor, this.about, required this.contactPhone, this.contactPhone2,
     this.phoneVerified = false, this.emailVerified = false, this.cnicVerified = false,
     this.cnic, this.password, this.smokes, this.drinks, this.monthlyIncome, this.hasDisability,
-    this.physicallyActive, required this.postedAt,
+    this.physicallyActive, required this.postedAt, this.submissionSource,
     this.status = ProposalStatus.pending,
     this.subscriptionTier = SubscriptionTier.none,
     this.subscriptionStatus = SubscriptionStatus.inactive,
     this.subscriptionStart, this.subscriptionExpiry,
     this.totalSpending = 0, this.featuredPointsPurchased = 0, this.featuredPointsUsed = 0,
     this.featuredSchedule = const [], this.activationCode, this.pendingFeaturedTokens = 0,
-    this.deletedFrom, this.deletionReason, this.adminNotes, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
+    this.deletedFrom, this.deletionReason, this.adminNotes, this.registrationAllowed = false, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
+    this.guardianCnicFront, this.guardianCnicBack, this.educationDocument,
     this.appliedCouponCode,
   });
 
@@ -400,6 +410,7 @@ class AdminUser {
       hasDisability: json['has_disability'] == null ? null : (json['has_disability'] == true || json['has_disability'] == 'true' || json['has_disability'] == 'Yes' ? 'Yes' : 'No'),
       physicallyActive: json['physically_active']?.toString(),
       postedAt: json['posted_at'] != null ? DateTime.parse(json['posted_at'] as String) : DateTime.fromMillisecondsSinceEpoch(0),
+      submissionSource: json['submission_source'] as String?,
       status: status, subscriptionTier: tier, subscriptionStatus: subStatus,
       subscriptionStart: subStart,
       subscriptionExpiry: subExpiry,
@@ -412,9 +423,13 @@ class AdminUser {
       deletedFrom: json['deleted_from'] as String?,
       deletionReason: json['deletion_reason'] as String?,
       adminNotes: json['admin_notes'] as String?,
+      registrationAllowed: json['registration_allowed'] as bool? ?? false,
       discarded: json['discarded'] as String?,
       suggestedInfo: json['suggested_info'] as String?,
       profilePhoto: profilePhoto, cnicFront: cnicFront, cnicBack: cnicBack,
+      guardianCnicFront: json['guardian_cnic_front_url'] as String?,
+      guardianCnicBack: json['guardian_cnic_back_url'] as String?,
+      educationDocument: json['education_document_url'] as String?,
       appliedCouponCode: json['applied_coupon_code'] as String?,
     );
   }
@@ -448,10 +463,13 @@ class AdminUser {
     if (contactPhone2 != null) 'contact_phone_2': contactPhone2,
     if (contactPhone2 == null || contactPhone2!.isEmpty) 'contact_phone_2': null,
     'phone_verified': phoneVerified, 'email_verified': emailVerified,
-    'cnic_verified': cnicVerified, 'cnic': cnic, 'password': password, 'admin_notes': adminNotes,
+    'cnic_verified': cnicVerified, 'cnic': cnic, 'password': password, 'admin_notes': adminNotes, 'registration_allowed': registrationAllowed,
     'profile_photo_url': profilePhoto,
     'cnic_front_url': cnicFront,
     'cnic_back_url': cnicBack,
+    'guardian_cnic_front_url': guardianCnicFront,
+    'guardian_cnic_back_url': guardianCnicBack,
+    'education_document_url': educationDocument,
     'status': status.name, 'subscription_tier': subscriptionTier.name,
   };
 
@@ -491,8 +509,9 @@ class AdminUser {
     bool? emailVerified, bool? cnicVerified, Object? cnic = _unset, Object? smokes = _unset, bool? drinks,
     Object? monthlyIncome = _unset, Object? hasDisability = _unset, Object? physicallyActive = _unset, String? disabilityDetails,
     bool? hasKids, Object? hasSiblings = _unset,
-    int? pendingFeaturedTokens, String? deletedFrom, Object? deletionReason = _unset, String? adminNotes,
-    String? profilePhoto, String? cnicFront, String? cnicBack, String? password,
+    int? pendingFeaturedTokens, String? deletedFrom, Object? deletionReason = _unset, String? adminNotes, bool? registrationAllowed,
+    String? profilePhoto, Object? cnicFront = _unset, Object? cnicBack = _unset, String? password,
+    Object? guardianCnicFront = _unset, Object? guardianCnicBack = _unset, Object? educationDocument = _unset,
     String? appliedCouponCode,
   }) => AdminUser(
     id: id, name: name ?? this.name, age: age ?? this.age, gender: gender ?? this.gender,
@@ -543,9 +562,13 @@ class AdminUser {
     featuredSchedule: featuredSchedule ?? this.featuredSchedule,
     activationCode: activationCode ?? this.activationCode,
     pendingFeaturedTokens: pendingFeaturedTokens ?? this.pendingFeaturedTokens,
-    deletedFrom: deletedFrom ?? this.deletedFrom, deletionReason: deletionReason is _Unset ? this.deletionReason : deletionReason as String?, adminNotes: adminNotes ?? this.adminNotes, discarded: discarded ?? this.discarded, suggestedInfo: suggestedInfo ?? this.suggestedInfo,
+    deletedFrom: deletedFrom ?? this.deletedFrom, deletionReason: deletionReason is _Unset ? this.deletionReason : deletionReason as String?, adminNotes: adminNotes ?? this.adminNotes, registrationAllowed: registrationAllowed ?? this.registrationAllowed, discarded: discarded ?? this.discarded, suggestedInfo: suggestedInfo ?? this.suggestedInfo,
     profilePhoto: profilePhoto ?? this.profilePhoto,
-    cnicFront: cnicFront ?? this.cnicFront, cnicBack: cnicBack ?? this.cnicBack,
+    cnicFront: cnicFront is _Unset ? this.cnicFront : cnicFront as String?,
+    cnicBack: cnicBack is _Unset ? this.cnicBack : cnicBack as String?,
+    guardianCnicFront: guardianCnicFront is _Unset ? this.guardianCnicFront : guardianCnicFront as String?,
+    guardianCnicBack: guardianCnicBack is _Unset ? this.guardianCnicBack : guardianCnicBack as String?,
+    educationDocument: educationDocument is _Unset ? this.educationDocument : educationDocument as String?,
     appliedCouponCode: appliedCouponCode ?? this.appliedCouponCode,
   );
 }

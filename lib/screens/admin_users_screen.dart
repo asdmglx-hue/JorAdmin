@@ -49,6 +49,7 @@ class AdminUsersScreen extends StatefulWidget {
 
 class _AdminUsersScreenState extends State<AdminUsersScreen> {
   String _filter = 'All';
+  String _aiSort = 'All'; // 'All', 'Permitted', 'Not Permitted'
   String _timeFilter = 'Any time';
   DateTime? _dateFrom;
   DateTime? _dateTo;
@@ -145,6 +146,8 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     // badge label on each card uses (hasFeaturedBoostToday).
     if (_filter == 'Featured') list = list.where((u) => hasFeaturedBoostToday(u)).toList();
     if (_filter == 'AI') list = list.where((u) => u.adminNotes == 'AI_IMPORTED').toList();
+    if (_filter == 'AI' && _aiSort == 'Permitted') list = list.where((u) => u.registrationAllowed).toList();
+    if (_filter == 'AI' && _aiSort == 'Not Permitted') list = list.where((u) => !u.registrationAllowed).toList();
     if (_filter == 'Refunded') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.refunded).toList();
     final now = DateTime.now();
     if (_dateFrom != null && _dateTo != null) {
@@ -378,8 +381,11 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
   Widget _buildFilterRow() {
     final s = _S.of(context);
     final filters = ['All', 'AI', 'Active', 'Inactive', 'Refunded', 'Paused', 'Featured'];
-    return SizedBox(
-      height: s.d(44),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: s.d(44),
       child: ListView.builder(
         padding: EdgeInsets.symmetric(horizontal: s.s(16), vertical: s.s(6)),
         scrollDirection: Axis.horizontal,
@@ -388,7 +394,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
           final f = filters[i];
           final sel = _filter == f;
           return GestureDetector(
-            onTap: () => setState(() => _filter = f),
+            onTap: () => setState(() { _filter = f; if (f != 'AI') _aiSort = 'All'; }),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               margin: EdgeInsets.only(right: s.s(8)),
@@ -405,21 +411,77 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
           );
         },
       ),
+        ),
+        // AI sub-sort chips — only show when AI filter is active
+        if (_filter == 'AI') ...[
+          SizedBox(height: s.s(6)),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: s.s(16)),
+            child: DropdownButtonHideUnderline(
+              child: Container(
+                height: s.d(34),
+                padding: EdgeInsets.symmetric(horizontal: s.s(12)),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF16132A),
+                  borderRadius: BorderRadius.circular(s.s(8)),
+                  border: Border.all(color: Colors.white.withOpacity(0.1)),
+                ),
+                child: DropdownButton<String>(
+                  value: _aiSort,
+                  dropdownColor: const Color(0xFF1E1A35),
+                  style: TextStyle(fontSize: s.f(12), color: Colors.white, fontWeight: FontWeight.w600),
+                  icon: Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18)),
+                  items: [
+                    DropdownMenuItem(value: 'All', child: Text('All', style: TextStyle(fontSize: s.f(12), color: Colors.white))),
+                    DropdownMenuItem(value: 'Permitted', child: Text('Permitted', style: TextStyle(fontSize: s.f(12), color: kGreen))),
+                    DropdownMenuItem(value: 'Not Permitted', child: Text('Not Permitted', style: TextStyle(fontSize: s.f(12), color: kRose))),
+                  ],
+                  onChanged: (v) => setState(() => _aiSort = v ?? 'All'),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
 
-class _UserCard extends StatelessWidget {
+class _UserCard extends StatefulWidget {
   final AdminUser user;
   final AdminService svc;
   final VoidCallback onEdit;
   final VoidCallback onView;
   final int featuredCreditPrice;
   const _UserCard({required this.user, required this.svc, required this.onEdit, required this.onView, this.featuredCreditPrice = 200});
+  @override State<_UserCard> createState() => _UserCardState();
+}
+
+class _UserCardState extends State<_UserCard> {
+  late bool _allowed;
+
+  @override
+  void initState() {
+    super.initState();
+    _allowed = widget.user.registrationAllowed;
+  }
+
+  @override
+  void didUpdateWidget(_UserCard old) {
+    super.didUpdateWidget(old);
+    if (old.user.registrationAllowed != widget.user.registrationAllowed) {
+      _allowed = widget.user.registrationAllowed;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final s = _S.of(context);
+    final user = widget.user;
+    final svc = widget.svc;
+    final onEdit = widget.onEdit;
+    final onView = widget.onView;
+    final featuredCreditPrice = widget.featuredCreditPrice;
     return GestureDetector(
       onLongPress: user.adminNotes == 'AI_IMPORTED' ? () => _showAiApprovalMenu(context) : null,
       child: Container(
@@ -487,14 +549,73 @@ class _UserCard extends StatelessWidget {
                         ],
                       ),
                       SizedBox(height: s.s(3)),
-                      Text(
-                        (user.cnic != null && user.cnic!.isNotEmpty)
-                            ? user.cnic!
-                            : (user.adminNotes == 'AI_IMPORTED' && user.proposalNumber != null)
-                                ? '#${user.proposalNumber}'
-                                : 'CNIC not set',
-                        style: TextStyle(fontSize: s.f(11), fontWeight: FontWeight.w500,
-                          color: (user.cnic != null && user.cnic!.isNotEmpty) ? Colors.white.withOpacity(0.45) : Colors.white.withOpacity(0.35)),
+                      Row(
+                        children: [
+                          Text(
+                            (user.cnic != null && user.cnic!.isNotEmpty)
+                                ? formatCnicDisplay(user.cnic!)
+                                : (user.adminNotes == 'AI_IMPORTED' && user.proposalNumber != null)
+                                    ? '#${user.proposalNumber}'
+                                    : 'CNIC not set',
+                            style: TextStyle(fontSize: s.f(11), fontWeight: FontWeight.w500,
+                              color: (user.cnic != null && user.cnic!.isNotEmpty) ? Colors.white.withOpacity(0.45) : Colors.white.withOpacity(0.35)),
+                          ),
+                          // Registration allowed checkbox inline — only for AI imported profiles
+                          if (user.adminNotes == 'AI_IMPORTED') ...[
+                            SizedBox(width: s.s(8)),
+                            GestureDetector(
+                              onTap: () async {
+                                final newVal = !_allowed;
+                          final confirmed = await showDialog<bool>(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              backgroundColor: const Color(0xFF1E1A35),
+                              title: Text(
+                                newVal ? 'Mark as Permitted?' : 'Mark as Not Permitted?',
+                                style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800),
+                              ),
+                              content: Text(
+                                newVal
+                                    ? 'Mark that this person has given you permission to create their profile.'
+                                    : 'Mark that this person has NOT given you permission to create their profile.',
+                                style: const TextStyle(color: Colors.white54, fontSize: 13),
+                              ),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, true),
+                                  child: Text('Confirm', style: TextStyle(color: newVal ? kGreen : kRose, fontWeight: FontWeight.w800)),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirmed != true) return;
+                          setState(() => _allowed = newVal);
+                          await SupabaseService.instance.client.from('proposals').update({'registration_allowed': newVal}).eq('id', user.id);
+                          svc.loadData();
+                        },
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _allowed ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+                              size: s.d(14),
+                              color: _allowed ? kGreen : Colors.white.withOpacity(0.3),
+                            ),
+                            SizedBox(width: s.s(4)),
+                            Text(
+                              _allowed ? 'Permission' : 'Permission',
+                              style: TextStyle(
+                                fontSize: s.f(10),
+                                fontWeight: FontWeight.w600,
+                                color: _allowed ? kGreen : Colors.white.withOpacity(0.3),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                          ],
+                        ],
                       ),
                     ],
                   ),
@@ -537,7 +658,7 @@ class _UserCard extends StatelessWidget {
                           ? user.subscriptionDaysLeft
                           : '—',
                   color: kPurple,
-                  onTap: null, // Superseded by the full "Approve Profile" dialog (long-press → Approve Profile), which sets expiry together with CNIC/password instead of on its own.
+                  onTap: () => _showSetDaysDialog(context),
                 ),
                 _divider(context),
                 _InfoChip(
@@ -576,7 +697,7 @@ class _UserCard extends StatelessWidget {
                           backgroundColor: const Color(0xFF16132A),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                           title: const Text('Confirm Renewal',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
                           content: const Text(
                             'User has made a payment for subscription renewal.',
                             style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
@@ -612,7 +733,7 @@ class _UserCard extends StatelessWidget {
                           backgroundColor: const Color(0xFF16132A),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                           title: const Text('Pause Profile?',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                              style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
                           content: Text(
                             '${user.name}\'s profile will be hidden from the feed. You can resume it anytime.',
                             style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13),
@@ -644,7 +765,7 @@ class _UserCard extends StatelessWidget {
                           backgroundColor: const Color(0xFF16132A),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                           title: const Text('Resume Profile?',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                              style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
                           content: Text(
                             '${user.name}\'s profile will be visible in the feed again.',
                             style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13),
@@ -689,9 +810,9 @@ class _UserCard extends StatelessWidget {
         backgroundColor: const Color(0xFF16132A),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: const Text('Move to Trash?',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+            style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
         content: Text(
-          '${user.name}\'s profile will be moved to trash. You can restore it later.',
+          '${widget.user.name}\'s profile will be moved to trash. You can restore it later.',
           style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13),
         ),
         actions: [
@@ -703,7 +824,7 @@ class _UserCard extends StatelessWidget {
             onPressed: () {
               Navigator.pop(context);
               HapticFeedback.heavyImpact();
-              svc.deleteUser(user.id, from: 'users');
+              widget.svc.deleteUser(widget.user.id, from: 'users');
             },
             child: const Text('Move to Trash', style: TextStyle(color: kRose, fontWeight: FontWeight.w700)),
           ),
@@ -718,7 +839,7 @@ class _UserCard extends StatelessWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _FeaturedManageSheet(user: user, svc: svc, featuredCreditPrice: featuredCreditPrice, messenger: messenger),
+      builder: (_) => _FeaturedManageSheet(user: widget.user, svc: widget.svc, featuredCreditPrice: widget.featuredCreditPrice, messenger: messenger),
     );
   }
 
@@ -774,11 +895,11 @@ class _UserCard extends StatelessWidget {
           title: Row(children: [
             Icon(Icons.event_available_rounded, color: kPurple, size: 20),
             const SizedBox(width: 8),
-            const Text('Set Days Left', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+            const Text('Set Usage', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
           ]),
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(
-              'Expiry for AI-added proposals must be added manually.',
+              'Add expiry for proposals manually',
               style: TextStyle(fontSize: 12.5, color: Colors.white.withOpacity(0.5)),
             ),
             const SizedBox(height: 14),
@@ -819,7 +940,7 @@ class _UserCard extends StatelessWidget {
                 onTap: !enabled ? null : () async {
                   setDlg(() { saving = true; error = null; });
                   try {
-                    await SupabaseService.instance.setCustomSubscriptionDays(user.id, days!);
+                    await SupabaseService.instance.setCustomSubscriptionDays(widget.user.id, days!);
                     if (dlgCtx.mounted) Navigator.pop(dlgCtx);
                   } catch (e) {
                     setDlg(() { saving = false; error = 'Failed to save'; });
@@ -854,7 +975,7 @@ class _UserCard extends StatelessWidget {
         const SizedBox(height: 16),
         ListTile(
           leading: const Icon(Icons.check_circle_rounded, color: kGreen),
-          title: const Text('Approve Profile', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+          title: const Text('Approve Profile', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
           subtitle: Text('Requires CNIC, password, and expiry to be set first',
             style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 11.5)),
           onTap: () { Navigator.pop(sheetCtx); _showApproveAiDialog(context); },
@@ -915,7 +1036,7 @@ class _UserCard extends StatelessWidget {
           title: Row(children: [
             Icon(Icons.check_circle_rounded, color: kGreen, size: 20),
             const SizedBox(width: 8),
-            const Text('Approve Profile', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+            const Text('Approve Profile', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
           ]),
           content: SingleChildScrollView(
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -995,7 +1116,7 @@ class _UserCard extends StatelessWidget {
 *Password:* ${passwordCtrl.text.trim()}
 
 *View Your Profile:*
-https://joronline.com/profile/${user.proposalNumber}
+https://joronline.com/profile/${widget.user.proposalNumber}
 
 You can change your password and update your profile after logging in.
 
@@ -1037,7 +1158,7 @@ Jor Team 🤗'''.trim();
                   try {
                     final spent = double.tryParse(spentCtrl.text.trim());
                     await SupabaseService.instance.approveAiProposalWithDetails(
-                      userId: user.id,
+                      userId: widget.user.id,
                       cnic: cnicCtrl.text.trim(),
                       password: passwordCtrl.text.trim(),
                       days: days!,

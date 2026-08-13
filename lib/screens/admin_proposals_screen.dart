@@ -7,6 +7,20 @@ import '../models/admin_models.dart';
 import 'admin_edit_user_screen.dart';
 import 'admin_trash_screen.dart';
 
+// Verification section — every one of these 5 documents must be uploaded
+// (via the edit profile screen's Verification section) before a proposal
+// can be approved. Returns the human-readable labels of whatever's still
+// missing, so the block message can name exactly what's needed.
+List<String> _missingVerificationDocs(AdminUser user) {
+  final missing = <String>[];
+  if (user.cnicFront == null || user.cnicFront!.isEmpty) missing.add('CNIC Front');
+  if (user.cnicBack == null || user.cnicBack!.isEmpty) missing.add('CNIC Back');
+  if (user.educationDocument == null || user.educationDocument!.isEmpty) missing.add('Education Document');
+  if (user.guardianCnicFront == null || user.guardianCnicFront!.isEmpty) missing.add('Guardian CNIC Front');
+  if (user.guardianCnicBack == null || user.guardianCnicBack!.isEmpty) missing.add('Guardian CNIC Back');
+  return missing;
+}
+
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
   final double scale;
@@ -293,7 +307,7 @@ class _ApprovedCard extends StatelessWidget {
                     ]),
                     SizedBox(height: _S.of(context).s(2)),
                     if (user.cnic != null && user.cnic!.isNotEmpty)
-                      Text(user.cnic!, style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.4)))
+                      Text(formatCnicDisplay(user.cnic!), style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.4)))
                     else if (user.adminNotes == 'AI_IMPORTED' && user.proposalNumber != null)
                       Text('#${user.proposalNumber}', style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.35)))
                     else
@@ -305,14 +319,31 @@ class _ApprovedCard extends StatelessWidget {
               Builder(builder: (ctx) => GestureDetector(
                 onTap: () => Navigator.push(ctx, MaterialPageRoute(
                   builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: true))),
-                child: Container(
-                  width: _S.of(context).d(28), height: _S.of(context).d(28),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.06),
-                    borderRadius: BorderRadius.circular(_S.of(context).s(8)),
-                  ),
-                  child: Icon(Icons.remove_red_eye_outlined,
-                      size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: _S.of(context).d(28), height: _S.of(context).d(28),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(_S.of(context).s(8)),
+                      ),
+                      child: Icon(Icons.remove_red_eye_outlined,
+                          size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
+                    ),
+                    if (svc.pendingVerificationProposalIds.contains(user.id))
+                      Positioned(
+                        top: -2, right: -2,
+                        child: Container(
+                          width: _S.of(context).d(10), height: _S.of(context).d(10),
+                          decoration: BoxDecoration(
+                            color: kRose,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: const Color(0xFF16132A), width: 1.5),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               )),
             ],
@@ -358,6 +389,15 @@ class _PendingCard extends StatelessWidget {
     if (months < 12) return '${months}mo ago';
     final years = (days / 365).floor();
     return '${years}y ago';
+  }
+
+  // Empty string for proposals submitted before this column existed
+  // (null) — the "Submitted X ago" label just reads normally on its
+  // own in that case, rather than showing a broken/unknown source.
+  String _sourceLabel(String? source) {
+    if (source == 'android_app') return ' via Android App';
+    if (source == 'website') return ' via Website';
+    return '';
   }
 
   @override
@@ -456,7 +496,7 @@ class _PendingCard extends StatelessWidget {
                     ),
                     SizedBox(height: _S.of(context).s(2)),
                     if (user.cnic != null && user.cnic!.isNotEmpty)
-                      Text(user.cnic!, style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.4)))
+                      Text(formatCnicDisplay(user.cnic!), style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.4)))
                     else if (user.adminNotes == 'AI_IMPORTED' && user.proposalNumber != null)
                       Text('#${user.proposalNumber}', style: TextStyle(fontSize: _S.of(context).f(11), color: Colors.white.withOpacity(0.35)))
                     else
@@ -468,21 +508,38 @@ class _PendingCard extends StatelessWidget {
               Builder(builder: (ctx) => GestureDetector(
                 onTap: () => Navigator.push(ctx, MaterialPageRoute(
                   builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: true))),
-                child: Container(
-                  width: _S.of(context).d(28), height: _S.of(context).d(28),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.06),
-                    borderRadius: BorderRadius.circular(_S.of(context).s(8)),
-                  ),
-                  child: Icon(Icons.remove_red_eye_outlined,
-                      size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: _S.of(context).d(28), height: _S.of(context).d(28),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(_S.of(context).s(8)),
+                      ),
+                      child: Icon(Icons.remove_red_eye_outlined,
+                          size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
+                    ),
+                    if (svc.pendingVerificationProposalIds.contains(user.id))
+                      Positioned(
+                        top: -2, right: -2,
+                        child: Container(
+                          width: _S.of(context).d(10), height: _S.of(context).d(10),
+                          decoration: BoxDecoration(
+                            color: kRose,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: const Color(0xFF16132A), width: 1.5),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               )),
             ],
           ),
           SizedBox(height: _S.of(context).s(12)),
           _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
-          _DetailRow(icon: Icons.calendar_today_rounded, label: 'Submitted ${_timeAgo(user.postedAt)}'),
+          _DetailRow(icon: Icons.calendar_today_rounded, label: 'Submitted ${_timeAgo(user.postedAt)}${_sourceLabel(user.submissionSource)}'),
           if (user.appliedCouponCode != null && user.appliedCouponCode!.isNotEmpty) ...[
             SizedBox(height: _S.of(context).s(4)),
             Container(
@@ -505,6 +562,32 @@ class _PendingCard extends StatelessWidget {
                 label: 'Approve', icon: Icons.check_rounded, color: kGreen,
                 onTap: () {
                   HapticFeedback.mediumImpact();
+                  final missingDocs = _missingVerificationDocs(user);
+                  if (missingDocs.isNotEmpty) {
+                    showDialog(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        backgroundColor: const Color(0xFF16132A),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_S.of(context).s(20))),
+                        title: const Text('Verification Incomplete', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                        content: Text(
+                          'This profile is missing: ${missingDocs.join(', ')}.\n\nUpload the missing documents in the Verification section of the edit profile screen before approving.',
+                          style: TextStyle(color: Colors.white70, fontSize: _S.of(context).f(13.5), height: 1.55),
+                        ),
+                        actions: [
+                          GestureDetector(
+                            onTap: () => Navigator.pop(context),
+                            child: Container(
+                              padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(16), vertical: _S.of(context).s(10)),
+                              decoration: BoxDecoration(color: kPurple, borderRadius: BorderRadius.circular(_S.of(context).s(10))),
+                              child: const Text('OK', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                    return;
+                  }
                   // AI imported proposals: skip payment dialog, approve with 0 amount
                   if (user.adminNotes == 'AI_IMPORTED') {
                     svc.approveAiProposal(user.id);
@@ -515,7 +598,7 @@ class _PendingCard extends StatelessWidget {
                     builder: (_) => AlertDialog(
                       backgroundColor: const Color(0xFF16132A),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_S.of(context).s(20))),
-                      title: const Text('Confirm Approval', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                      title: const Text('Confirm Approval', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
                       content: Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,

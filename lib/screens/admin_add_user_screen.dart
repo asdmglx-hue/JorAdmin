@@ -1,4 +1,5 @@
-import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -117,12 +118,12 @@ class _AdminAddUserScreenState extends State<AdminAddUserScreen> {
   String _monthlyIncome = '';
   String _hasKids = '';
 
-  File? _profilePhoto;
-  File? _cnicFront;
-  File? _cnicBack;
-  File? _degreeCert;
-  File? _degreeCert2;
-  File? _degreeCert3;
+  Uint8List? _profilePhoto;
+  Uint8List? _cnicFront;
+  Uint8List? _cnicBack;
+  Uint8List? _degreeCert;
+  Uint8List? _degreeCert2;
+  Uint8List? _degreeCert3;
 
   bool get _showKids {
     final s = _maritalStatus.toLowerCase();
@@ -903,24 +904,22 @@ class _HeightDropdownsState extends State<_HeightDropdowns> {
 // handles that insert-then-upload sequencing atomically.
 class _NewPhotoSlot extends StatelessWidget {
   final String label;
-  final File? file;
+  final Uint8List? file;
   final bool crop;
-  final ValueChanged<File?> onChanged;
+  final ValueChanged<Uint8List?> onChanged;
   const _NewPhotoSlot({required this.label, required this.file, required this.onChanged, this.crop = false});
 
-  Future<void> _pick(BuildContext context, ImageSource source) async {
+  Future<void> _pick(BuildContext context, [ImageSource source = ImageSource.gallery]) async {
     final picked = await ImagePicker().pickImage(source: source, imageQuality: 75, maxWidth: 800);
     if (picked == null) return;
+    final bytes = await picked.readAsBytes();
     if (crop) {
-      final bytes = await picked.readAsBytes();
       if (!context.mounted) return;
       final cropped = await showPhotoCropDialog(context, bytes);
       if (cropped == null) return;
-      final tempPath = '${picked.path}_cropped.jpg';
-      final tempFile = await File(tempPath).writeAsBytes(cropped);
-      onChanged(tempFile);
+      onChanged(cropped);
     } else {
-      onChanged(File(picked.path));
+      onChanged(bytes);
     }
   }
 
@@ -933,7 +932,7 @@ class _NewPhotoSlot extends StatelessWidget {
         const SizedBox(height: 8),
         Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
         const SizedBox(height: 16),
-        ListTile(
+        if (!kIsWeb) ListTile(
           leading: const Icon(Icons.camera_alt_rounded, color: kPurple),
           title: const Text('Take Photo', style: TextStyle(color: Colors.white)),
           onTap: () { Navigator.pop(sheetCtx); _pick(context, ImageSource.camera); },
@@ -941,7 +940,7 @@ class _NewPhotoSlot extends StatelessWidget {
         ListTile(
           leading: const Icon(Icons.photo_library_rounded, color: kPurple),
           title: const Text('Choose from Gallery', style: TextStyle(color: Colors.white)),
-          onTap: () { Navigator.pop(sheetCtx); _pick(context, ImageSource.gallery); },
+          onTap: () { Navigator.pop(sheetCtx); _pick(context); },
         ),
         if (file != null)
           ListTile(
@@ -972,7 +971,7 @@ class _NewPhotoSlot extends StatelessWidget {
               ? ClipRRect(
                   borderRadius: BorderRadius.circular(s.s(11)),
                   child: Stack(fit: StackFit.expand, children: [
-                    Image.file(file!, fit: BoxFit.cover),
+                    Image.memory(file!, fit: BoxFit.cover),
                     Positioned(
                       bottom: 0, left: 0, right: 0,
                       child: Container(

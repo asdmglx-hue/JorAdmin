@@ -1,6 +1,6 @@
+import 'dart:typed_data';
 // lib/services/ai_parse_service.dart
 import 'dart:convert';
-import 'dart:io';
 import 'package:http/http.dart' as http;
 
 // Get your key from: https://console.anthropic.com
@@ -92,7 +92,7 @@ class ParsedProposal {
 
 Future<ParsedProposal> parseWhatsAppProposal({
   required String message,
-  File? photoFile,
+  Uint8List? photoBytes,
 }) async {
   const systemPrompt = '''
 You are a data extraction assistant for a Pakistani Rishta (marriage proposal) app.
@@ -173,9 +173,9 @@ Rules:
 
   final List<Map<String, dynamic>> contentParts = [];
 
-  if (photoFile != null) {
+  if (photoBytes != null) {
     try {
-      final bytes = await photoFile.readAsBytes();
+      final bytes = photoBytes;
       contentParts.add({
         'type': 'image',
         'source': {

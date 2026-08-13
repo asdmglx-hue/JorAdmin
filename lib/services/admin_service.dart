@@ -1,6 +1,6 @@
-import 'dart:io';
 import 'dart:async';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/admin_models.dart';
@@ -43,6 +43,38 @@ class AdminService extends ChangeNotifier {
   // opens by unique device, not a proxy based on profile submissions).
   int _cachedVisitorCount = 0;
 
+  // Proposal IDs with a pending self-service CNIC verification submission
+  // (cnic_verification_requests, status='pending') — drives the red dot
+  // on the View icon in the Users tab, and lets the Edit screen know
+  // whether to show a submitted-documents section for this profile.
+  // Replaces the old standalone "Verify" tab/list in the Requests screen:
+  // review now happens per-profile from the Edit screen instead of a
+  // separate bulk queue.
+  Set<String> _pendingVerificationProposalIds = {};
+  Set<String> get pendingVerificationProposalIds => Set.unmodifiable(_pendingVerificationProposalIds);
+  RealtimeChannel? _verificationSyncChannel;
+
+  Future<void> loadPendingVerifications() async {
+    try {
+      final rows = await client.from('cnic_verification_requests').select('proposal_id').eq('status', 'pending') as List;
+      _pendingVerificationProposalIds = rows.map((r) => r['proposal_id'] as String).toSet();
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  void _startVerificationSync() {
+    _verificationSyncChannel?.unsubscribe();
+    _verificationSyncChannel = client
+        .channel('admin_service_cnic_verification_sync')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'cnic_verification_requests',
+          callback: (_) => loadPendingVerifications(),
+        )
+        .subscribe();
+  }
+
   // "Reset stats" baselines — subtracted from the live-computed totals
   // below so the dashboard can show 0 right after an admin resets it,
   // without touching any real underlying data (proposals, payments, or
@@ -78,6 +110,8 @@ class AdminService extends ChangeNotifier {
       notifyListeners();
       loadData(); // kick off real data load after login
       _startRealtimeSync();
+      loadPendingVerifications();
+      _startVerificationSync();
       return true;
     }
     return false;
@@ -89,6 +123,9 @@ class AdminService extends ChangeNotifier {
     _codes = [];
     _syncChannel?.unsubscribe();
     _syncChannel = null;
+    _verificationSyncChannel?.unsubscribe();
+    _verificationSyncChannel = null;
+    _pendingVerificationProposalIds = {};
     notifyListeners();
     _db.adminLogout();
   }
@@ -107,6 +144,9 @@ class AdminService extends ChangeNotifier {
   // is ever applied.
   Future<void>? _loadDataFuture;
   int _loadRequestId = 0;
+  // Tracks when we last successfully loaded all users — used to fetch only
+  // changed rows on subsequent refreshes instead of the full table.
+  DateTime? _lastSyncTime;
 
   Future<void> loadData() {
     if (_loadDataFuture != null) return _loadDataFuture!;
@@ -122,56 +162,80 @@ class AdminService extends ChangeNotifier {
     _loadError = null;
     notifyListeners();
     try {
-      final results = await Future.wait([
-        _db.fetchAdminUsers(),
+      final isFirstLoad = _lastSyncTime == null || _users.isEmpty;
+      final syncFrom = _lastSyncTime;
+      // Record sync time before fetching so any changes that land during
+      // this fetch are included in the next incremental sync.
+      final syncStarted = DateTime.now().toUtc();
+
+      // All non-user fetches run in parallel regardless of first/incremental.
+      // fetchAppSettings runs in parallel too — was sequential before.
+      final sideResults = await Future.wait([
         _db.fetchActivationCodes(),
         _db.fetchMonthlyRevenue(),
         _db.client.from('affiliates').select('id').or('deleted.is.null,deleted.eq.false'),
         _db.client.from('affiliates').select('id').eq('deleted', true),
         _db.fetchVisitorCount(),
+        _db.fetchAppSettings(),
       ]);
-      // A newer loadData() call started and already applied its own (more
-      // current) results while we were fetching — discard ours instead of
-      // overwriting good data with something older.
+
+      List<AdminUser> freshUsers;
+      if (isFirstLoad) {
+        // First load — fetch everything via the summary view (1 call).
+        freshUsers = await _db.fetchAdminUsers();
+      } else {
+        // Incremental refresh — only rows changed since last sync.
+        // Typically 0–10 rows instead of 2341, so this feels instant.
+        freshUsers = await _db.fetchAdminUsersSince(syncFrom!);
+      }
+
       if (requestId != _loadRequestId) return;
-      final freshUsers = results[0] as List<AdminUser>;
-      // Don't let a DB reload resurrect users we've already optimistically deleted
-      _users = freshUsers.map((u) {
-        if (_pendingDeleteIds.contains(u.id)) {
-          // If DB confirms deleted, safe to remove from guard set
-          if (u.status == ProposalStatus.deleted) _pendingDeleteIds.remove(u.id);
-          return u.copyWith(status: ProposalStatus.deleted);
-        }
-        if (_pendingRestoreStatus.containsKey(u.id)) {
-          return u.copyWith(status: _pendingRestoreStatus[u.id], deletedFrom: null);
-        }
-        return u;
-      }).toList();
-      _codes = results[1] as List<ActivationCode>;
-      _cachedMonthlyRevenue = (results[2] as double?) ?? 0.0;
-      _affiliateTotalCount = (results[3] as List).length;
-      _affiliateTrashCount = (results[4] as List).length;
-      // Real all-time visitor count — every unique device that's ever
-      // opened the app, not a proxy based on profile submissions. Doesn't
-      // need a "deleted offset" the way user/revenue counts do, because
-      // deleting a proposal never removes anyone from app_visitors — the
-      // two tables are unrelated (device visits vs. submitted profiles).
-      _cachedVisitorCount = results[5] as int;
-      // Load persisted offsets from app_settings (survive logout/login)
-      final settings = await _db.fetchAppSettings();
-      _deletedUsersRevenue   = double.tryParse(settings['deleted_users_revenue_offset']  ?? '0') ?? 0;
-      _deletedUsersCount     = int.tryParse(settings['deleted_users_count_offset']       ?? '0') ?? 0;
+
+      if (isFirstLoad) {
+        // Replace full list on first load.
+        _users = freshUsers.map((u) => _applyPendingOps(u)).toList();
+      } else {
+        // Merge changed rows into existing list — add new, update existing.
+        final updatedIds = freshUsers.map((u) => u.id).toSet();
+        _users = [
+          ..._users.where((u) => !updatedIds.contains(u.id)),
+          ...freshUsers.map((u) => _applyPendingOps(u)),
+        ];
+        // Re-sort by updated_at desc to keep order consistent.
+        _users.sort((a, b) => b.postedAt.compareTo(a.postedAt));
+      }
+
+      _lastSyncTime = syncStarted;
+      _codes = sideResults[0] as List<ActivationCode>;
+      _cachedMonthlyRevenue = (sideResults[1] as double?) ?? 0.0;
+      _affiliateTotalCount = (sideResults[2] as List).length;
+      _affiliateTrashCount = (sideResults[3] as List).length;
+      _cachedVisitorCount = sideResults[4] as int;
+      final settings = sideResults[5] as Map<String, String>;
+      _deletedUsersRevenue = double.tryParse(settings['deleted_users_revenue_offset'] ?? '0') ?? 0;
+      _deletedUsersCount   = int.tryParse(settings['deleted_users_count_offset']      ?? '0') ?? 0;
       _applyResetBaselineSettings(settings);
-      debugPrint('[AdminService] loadData — deletedRevenue=$_deletedUsersRevenue deletedCount=$_deletedUsersCount visitorCount=$_cachedVisitorCount monthlyRevenue=$_cachedMonthlyRevenue');
+      debugPrint('[AdminService] loadData (${isFirstLoad ? "full" : "incremental"}) — users=${_users.length} changed=${freshUsers.length}');
     } catch (e, stackTrace) {
       _loadError = e.toString();
       debugPrint('❌ loadData ERROR: $e');
       debugPrint('❌ loadData STACK: $stackTrace');
-      // Keep any previously loaded data on error — don't blank the screen
     } finally {
       _loading = false;
       notifyListeners();
     }
+  }
+
+  // Applies pending optimistic ops (delete/restore) to a freshly fetched user.
+  AdminUser _applyPendingOps(AdminUser u) {
+    if (_pendingDeleteIds.contains(u.id)) {
+      if (u.status == ProposalStatus.deleted) _pendingDeleteIds.remove(u.id);
+      return u.copyWith(status: ProposalStatus.deleted);
+    }
+    if (_pendingRestoreStatus.containsKey(u.id)) {
+      return u.copyWith(status: _pendingRestoreStatus[u.id], deletedFrom: null);
+    }
+    return u;
   }
 
   // ── Stats (computed from local cache — always fast) ───────────────────────
@@ -259,12 +323,12 @@ class AdminService extends ChangeNotifier {
 
   Future<void> addUserWithPhotos({
     required Map<String, dynamic> data,
-    File? profilePhoto,
-    File? cnicFront,
-    File? cnicBack,
-    File? degreeCertificate,
-    File? degreeCertificate2,
-    File? degreeCertificate3,
+    Uint8List? profilePhoto,
+    Uint8List? cnicFront,
+    Uint8List? cnicBack,
+    Uint8List? degreeCertificate,
+    Uint8List? degreeCertificate2,
+    Uint8List? degreeCertificate3,
   }) async {
     await _db.addUserWithPhotos(
       data: data,

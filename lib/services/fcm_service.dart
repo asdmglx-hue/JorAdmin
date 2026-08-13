@@ -33,6 +33,7 @@ class FCMService {
   final _fcm = FirebaseMessaging.instance;
 
   Future<void> init() async {
+    if (kIsWeb) return; // FCM not needed on web
     try {
       // Register background handler (required even as a placeholder).
       FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);

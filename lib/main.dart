@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -22,9 +23,17 @@ import 'screens/admin_login_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  // Firebase is only needed for FCM (mobile push notifications).
+  // On web, skip it entirely — no push needed for admin web panel.
+  if (!kIsWeb) {
+    try {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+    } catch (e) {
+      debugPrint('Firebase init error: $e');
+    }
+  }
 
   try {
     await Supabase.initialize(
@@ -44,7 +53,7 @@ void main() async {
   // FCM device registration only (permission + token sync). Push-sending
   // logic and the in-app notification system have been removed and are
   // pending a fresh implementation.
-  await FCMService.instance.init();
+  if (!kIsWeb) await FCMService.instance.init();
 
   // Fetch DB-driven lists in background — castes, cities, occupations
   // use SharedPreferences caching so they're available immediately on
@@ -53,7 +62,7 @@ void main() async {
   SupabaseService.instance.fetchCities();
   SupabaseService.instance.fetchOccupations();
 
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+  if (!kIsWeb) SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.dark,
   ));

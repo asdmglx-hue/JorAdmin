@@ -1,5 +1,5 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/theme.dart';
@@ -426,7 +426,7 @@ class _BlogPostFormState extends State<_BlogPostForm> {
   // save, or the URL already stored from a previous save (when editing).
   // At most one of these is meaningful at a time — picking a new image
   // sets _coverFile and clears _existingCoverUrl from consideration.
-  File? _coverFile;
+  Uint8List? _coverBytes;
   String? _existingCoverUrl;
   bool _uploadingCover = false;
 
@@ -452,11 +452,12 @@ class _BlogPostFormState extends State<_BlogPostForm> {
   Future<void> _pickCoverImage() async {
     final picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 80, maxWidth: 1600);
     if (picked == null) return;
-    setState(() { _coverFile = File(picked.path); _existingCoverUrl = null; });
+    final bytes = await picked.readAsBytes();
+    setState(() { _coverBytes = bytes; _existingCoverUrl = null; });
   }
 
   void _removeCoverImage() {
-    setState(() { _coverFile = null; _existingCoverUrl = null; });
+    setState(() { _coverBytes = null; _existingCoverUrl = null; });
   }
 
   Future<void> _save() async {
@@ -474,10 +475,10 @@ class _BlogPostFormState extends State<_BlogPostForm> {
     // a post without touching the cover image just keeps the existing
     // URL as-is.
     String? coverUrl = _existingCoverUrl;
-    if (_coverFile != null) {
+    if (_coverBytes != null) {
       setState(() => _uploadingCover = true);
       try {
-        coverUrl = await SupabaseService.instance.uploadBlogCoverImage(_coverFile!, title);
+        coverUrl = await SupabaseService.instance.uploadBlogCoverImage(_coverBytes!, title);
       } catch (e) {
         setState(() { _saving = false; _uploadingCover = false; });
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to upload cover image: $e')));
@@ -572,13 +573,13 @@ class _BlogPostFormState extends State<_BlogPostForm> {
                   color: Colors.black.withOpacity(0.25),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.white.withOpacity(0.1)),
-                  image: _coverFile != null
-                    ? DecorationImage(image: FileImage(_coverFile!), fit: BoxFit.cover)
+                  image: _coverBytes != null
+                    ? DecorationImage(image: MemoryImage(_coverBytes!), fit: BoxFit.cover)
                     : (_existingCoverUrl != null
                         ? DecorationImage(image: NetworkImage(_existingCoverUrl!), fit: BoxFit.cover)
                         : null),
                 ),
-                child: (_coverFile == null && _existingCoverUrl == null)
+                child: (_coverBytes == null && _existingCoverUrl == null)
                   ? Center(
                       child: Column(mainAxisSize: MainAxisSize.min, children: [
                         Icon(Icons.add_photo_alternate_outlined, color: Colors.white.withOpacity(0.3), size: 28),

@@ -150,6 +150,43 @@ class EditRequest {
   }
 }
 
+// ── One row from profile_reports, joined with the reported profile's
+// basic info for display ────────────────────────────────────────────────
+class ProfileReport {
+  final String id;
+  final String proposalId;
+  final String proposalName;
+  final int proposalNumber;
+  final String proposalCity;
+  final String? reporterCnic;
+  final String reason;
+  final String? details;
+  final String status; // 'pending' | 'reviewed' | 'dismissed'
+  final DateTime createdAt;
+
+  const ProfileReport({
+    required this.id, required this.proposalId, required this.proposalName,
+    required this.proposalNumber, required this.proposalCity, this.reporterCnic,
+    required this.reason, this.details, required this.status, required this.createdAt,
+  });
+
+  factory ProfileReport.fromJson(Map<String, dynamic> json) {
+    final proposal = json['proposals'] as Map<String, dynamic>?;
+    return ProfileReport(
+      id: json['id'] as String,
+      proposalId: json['reported_proposal_id'] as String,
+      proposalName: proposal?['name'] as String? ?? 'Unknown',
+      proposalNumber: proposal?['proposal_number'] as int? ?? 0,
+      proposalCity: proposal?['city'] as String? ?? '',
+      reporterCnic: json['reporter_cnic'] as String?,
+      reason: json['reason'] as String,
+      details: json['details'] as String?,
+      status: json['status'] as String,
+      createdAt: DateTime.parse(json['created_at'] as String),
+    );
+  }
+}
+
 class AdminEditRequestsScreen extends StatefulWidget {
   const AdminEditRequestsScreen({super.key});
   @override State<AdminEditRequestsScreen> createState() => _AdminEditRequestsScreenState();
@@ -161,6 +198,15 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
   String _search = '';
   final _searchCtrl = TextEditingController();
   RealtimeChannel? _channel;
+  // 0 = Review, 1 = Report — CNIC self-service verification requests
+  // used to be a third tab here, but that review now happens per-profile
+  // from the Edit screen instead (see admin_edit_user_screen.dart), with
+  // a red dot on the Users tab's View icon flagging which profiles have
+  // a pending submission — see AdminService.pendingVerificationProposalIds.
+  int _selectedTab = 0;
+  List<ProfileReport> _reports = [];
+  bool _reportsLoading = true;
+  RealtimeChannel? _reportsChannel;
   // Counts reverts within the CURRENT round of review for each profile —
   // not the same as "how many fields are reverted in this profile's whole
   // history". A field reverted in an earlier, already-closed round (badge
@@ -172,6 +218,7 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadReports();
     // Auto-refresh whenever a user submits a new edit while this screen is
     // open — otherwise a fresh submission would sit invisible until admin
     // manually hits refresh, since this screen only re-fetches on demand.
@@ -184,13 +231,61 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
           callback: (_) => _load(silent: true),
         )
         .subscribe();
+    // Same auto-refresh for new reports coming in while this screen is
+    // open, regardless of which tab is currently selected.
+    _reportsChannel = _supabase
+        .channel('profile_reports_changes')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'profile_reports',
+          callback: (_) => _loadReports(silent: true),
+        )
+        .subscribe();
   }
 
   @override
   void dispose() {
     _searchCtrl.dispose();
     _channel?.unsubscribe();
+    _reportsChannel?.unsubscribe();
     super.dispose();
+  }
+
+  Future<void> _loadReports({bool silent = false}) async {
+    if (!silent) setState(() => _reportsLoading = true);
+    try {
+      final data = await _supabase
+          .from('profile_reports')
+          .select('*, proposals(name, city, proposal_number)')
+          .order('created_at', ascending: false)
+          .limit(500);
+      final reports = (data as List)
+          .map((row) => ProfileReport.fromJson(row as Map<String, dynamic>))
+          .toList();
+      if (mounted) setState(() { _reports = reports; _reportsLoading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _reportsLoading = false);
+    }
+  }
+
+  Future<void> _setReportStatus(ProfileReport r, String status) async {
+    // Optimistic — update locally first so the tap feels instant, matching
+    // the pattern _RequestCard's tick/cross already uses elsewhere in
+    // this same screen.
+    setState(() {
+      _reports = _reports.map((x) => x.id == r.id
+          ? ProfileReport(id: x.id, proposalId: x.proposalId, proposalName: x.proposalName,
+              proposalNumber: x.proposalNumber, proposalCity: x.proposalCity,
+              reporterCnic: x.reporterCnic, reason: x.reason, details: x.details,
+              status: status, createdAt: x.createdAt)
+          : x).toList();
+    });
+    try {
+      await _supabase.from('profile_reports').update({'status': status}).eq('id', r.id);
+    } catch (_) {
+      if (mounted) _loadReports(silent: true);
+    }
   }
 
   List<EditRequest> get _filtered {
@@ -200,6 +295,17 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
     return _requests.where((r) =>
       r.proposalName.toLowerCase().contains(q) ||
       r.proposalCnic.toLowerCase().contains(q) ||
+      (numSearch != null && r.proposalNumber == numSearch)
+    ).toList();
+  }
+
+  List<ProfileReport> get _filteredReports {
+    if (_search.isEmpty) return _reports;
+    final q = _search.toLowerCase();
+    final numSearch = _search.startsWith('#') ? int.tryParse(_search.substring(1)) : null;
+    return _reports.where((r) =>
+      r.proposalName.toLowerCase().contains(q) ||
+      r.reason.toLowerCase().contains(q) ||
       (numSearch != null && r.proposalNumber == numSearch)
     ).toList();
   }
@@ -279,16 +385,18 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
   Future<void> _revertField(EditRequest req, FieldChange diff) async {
     final confirmed = await _confirm(
       context,
-      title: 'Revert this change?',
-      body: '${_fieldLabel(diff.key)} will be reverted back to its previous value for ${req.proposalName}.',
-      confirmLabel: 'Revert',
+      title: 'Reject this change?',
+      body: '${_fieldLabel(diff.key)} will stay as it was for ${req.proposalName} — the submitted change is discarded.',
+      confirmLabel: 'Reject',
       confirmColor: _kRose,
     );
     if (confirmed != true) return;
 
     try {
-      await _supabase.from('proposals')
-          .update({diff.key: diff.oldValue}).eq('id', req.proposalId);
+      // No longer writes anything back to proposals here — a pending
+      // field was never applied there in the first place (see
+      // update_own_proposal), so there's nothing live to undo. This is
+      // purely a bookkeeping event marking the submission as rejected.
       await _supabase.from('profile_edit_requests').insert({
         'proposal_id': req.proposalId,
         'changes': {diff.key: diff.oldValue},
@@ -305,8 +413,47 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
       _revertedThisRound[req.proposalId] = (_revertedThisRound[req.proposalId] ?? 0) + 1;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Reverted ${_fieldLabel(diff.key)} for ${req.proposalName}'),
+          content: Text('Rejected ${_fieldLabel(diff.key)} for ${req.proposalName}'),
           backgroundColor: _kRose,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 72),
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+        ));
+        await _maybeNotifyEditsResolved(req.proposalId);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Error: $e'),
+        backgroundColor: _kRose,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 72),
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+      ));
+    }
+  }
+
+  /// Approves a pending field — this is what actually makes it go live
+  /// now (previously it was already live and this was just an
+  /// acknowledgment). Writes the value to proposals first, then the same
+  /// "keep" confirmation event as before (oldValue == newValue) so the
+  /// resolution algorithm correctly reads this field as resolved.
+  Future<void> _keepField(EditRequest req, FieldChange field) async {
+    try {
+      await _supabase.from('proposals')
+          .update({field.key: field.newValue}).eq('id', req.proposalId);
+      await _supabase.from('profile_edit_requests').insert({
+        'proposal_id': req.proposalId,
+        'changes': {field.key: field.newValue},
+        'old_values': {field.key: field.newValue},
+        'status': 'applied',
+        // See _revertField for why submitted_at is intentionally omitted.
+        'reviewed_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Approved ${_fieldLabel(field.key)} for ${req.proposalName} — now live'),
+          backgroundColor: _kGreen,
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 72),
           shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
@@ -319,34 +466,11 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
       final isNotNullViolation = msg.contains('violates not-null constraint');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(isNotNullViolation
-            ? "Can't revert ${_fieldLabel(diff.key)} — this field can't be left empty. "
+            ? "Can't approve ${_fieldLabel(field.key)} — this field can't be left empty. "
                 "Edit it manually from the Users screen instead."
             : 'Error: $e'),
         backgroundColor: _kRose,
         behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 72),
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
-      ));
-    }
-  }
-
-  /// Marks a field as explicitly kept (tick). Writes a real "confirm" event
-  /// (oldValue == newValue) rather than just local UI state — that's what
-  /// makes it survive reloads, matching how revert already persists.
-  Future<void> _keepField(EditRequest req, FieldChange field) async {
-    try {
-      await _supabase.from('profile_edit_requests').insert({
-        'proposal_id': req.proposalId,
-        'changes': {field.key: field.newValue},
-        'old_values': {field.key: field.newValue},
-        'status': 'applied',
-        // See _revertField for why submitted_at is intentionally omitted.
-        'reviewed_at': DateTime.now().toUtc().toIso8601String(),
-      });
-      if (mounted) await _maybeNotifyEditsResolved(req.proposalId);
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Error: $e'), backgroundColor: _kRose, behavior: SnackBarBehavior.floating,
       ));
     }
   }
@@ -371,12 +495,14 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
   @override
   Widget build(BuildContext context) {
     final s = _S.of(context);
+    final pendingReports = _reports.where((r) => r.status == 'pending').length;
+    final pendingReviews = _requests.where((r) => r.hasPending).length;
     return Scaffold(
       backgroundColor: _kBg,
       appBar: AppBar(
         backgroundColor: _kCard,
         elevation: 0,
-        title: Text('Review Changes', style: TextStyle(color: Colors.white, fontSize: s.f(17), fontWeight: FontWeight.w800)),
+        title: Text(_selectedTab == 0 ? 'Review Changes' : _selectedTab == 1 ? 'Reported Profiles' : 'CNIC Verification', style: TextStyle(color: Colors.white, fontSize: s.f(17), fontWeight: FontWeight.w800)),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
           onPressed: () => Navigator.pop(context),
@@ -384,64 +510,155 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
-            onPressed: _load,
+            onPressed: _selectedTab == 0 ? _load : _loadReports,
           ),
         ],
         bottom: PreferredSize(
-          preferredSize: Size.fromHeight(s.d(56)),
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(s.s(16), 0, s.s(16), s.s(10)),
-            child: Container(
-              height: s.d(40),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.07),
-                borderRadius: BorderRadius.circular(s.s(12)),
-                border: Border.all(color: Colors.white.withOpacity(0.1)),
-              ),
-              child: TextField(
-                controller: _searchCtrl,
-                onChanged: (v) => setState(() => _search = v),
-                style: TextStyle(color: Colors.white, fontSize: s.f(13)),
-                decoration: InputDecoration(
-                  hintText: 'Search by name, CNIC or #number...',
-                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: s.f(12.5)),
-                  prefixIcon: Icon(Icons.search_rounded, color: Colors.white.withOpacity(0.35), size: s.d(18)),
-                  border: InputBorder.none,
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(vertical: s.s(11)),
-                  suffixIcon: _search.isNotEmpty
-                      ? GestureDetector(
-                          onTap: () => setState(() { _search = ''; _searchCtrl.clear(); }),
-                          child: Icon(Icons.close_rounded, color: Colors.white.withOpacity(0.4), size: s.d(16)),
-                        )
-                      : null,
+          preferredSize: Size.fromHeight(s.d(104)),
+          child: Column(
+            children: [
+              // Review / Report toggle — same underlying screen, since
+              // both are "things an admin needs to look at and act on"
+              // sharing the same header/search chrome, just different
+              // content underneath.
+              Padding(
+                padding: EdgeInsets.fromLTRB(s.s(16), 0, s.s(16), s.s(10)),
+                child: Container(
+                  height: s.d(40),
+                  padding: EdgeInsets.all(s.s(3)),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.07),
+                    borderRadius: BorderRadius.circular(s.s(12)),
+                  ),
+                  child: Row(children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => setState(() => _selectedTab = 0),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          decoration: BoxDecoration(
+                            color: _selectedTab == 0 ? _kPurple : Colors.transparent,
+                            borderRadius: BorderRadius.circular(s.s(9)),
+                          ),
+                          alignment: Alignment.center,
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            Text('Review', style: TextStyle(color: Colors.white, fontSize: s.f(13), fontWeight: FontWeight.w700)),
+                            if (pendingReviews > 0) ...[
+                              SizedBox(width: s.s(6)),
+                              Container(
+                                padding: EdgeInsets.symmetric(horizontal: s.s(6), vertical: s.s(1)),
+                                decoration: BoxDecoration(
+                                  color: _selectedTab == 0 ? Colors.white.withOpacity(0.25) : _kPurple,
+                                  borderRadius: BorderRadius.circular(s.s(20)),
+                                ),
+                                child: Text('$pendingReviews', style: TextStyle(color: Colors.white, fontSize: s.f(10.5), fontWeight: FontWeight.w800)),
+                              ),
+                            ],
+                          ]),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => setState(() => _selectedTab = 1),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          decoration: BoxDecoration(
+                            color: _selectedTab == 1 ? _kRose : Colors.transparent,
+                            borderRadius: BorderRadius.circular(s.s(9)),
+                          ),
+                          alignment: Alignment.center,
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            Text('Report', style: TextStyle(color: Colors.white, fontSize: s.f(13), fontWeight: FontWeight.w700)),
+                            if (pendingReports > 0) ...[
+                              SizedBox(width: s.s(6)),
+                              Container(
+                                padding: EdgeInsets.symmetric(horizontal: s.s(6), vertical: s.s(1)),
+                                decoration: BoxDecoration(
+                                  color: _selectedTab == 1 ? Colors.white.withOpacity(0.25) : _kRose,
+                                  borderRadius: BorderRadius.circular(s.s(20)),
+                                ),
+                                child: Text('$pendingReports', style: TextStyle(color: Colors.white, fontSize: s.f(10.5), fontWeight: FontWeight.w800)),
+                              ),
+                            ],
+                          ]),
+                        ),
+                      ),
+                    ),
+                  ]),
                 ),
               ),
-            ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(s.s(16), 0, s.s(16), s.s(10)),
+                child: Container(
+                  height: s.d(40),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.07),
+                    borderRadius: BorderRadius.circular(s.s(12)),
+                    border: Border.all(color: Colors.white.withOpacity(0.1)),
+                  ),
+                  child: TextField(
+                    controller: _searchCtrl,
+                    onChanged: (v) => setState(() => _search = v),
+                    style: TextStyle(color: Colors.white, fontSize: s.f(13)),
+                    decoration: InputDecoration(
+                      hintText: _selectedTab == 0 ? 'Search by name, CNIC or #number...' : _selectedTab == 1 ? 'Search by name, reason or #number...' : 'Search by name or #number...',
+                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: s.f(12.5)),
+                      prefixIcon: Icon(Icons.search_rounded, color: Colors.white.withOpacity(0.35), size: s.d(18)),
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(vertical: s.s(11)),
+                      suffixIcon: _search.isNotEmpty
+                          ? GestureDetector(
+                              onTap: () => setState(() { _search = ''; _searchCtrl.clear(); }),
+                              child: Icon(Icons.close_rounded, color: Colors.white.withOpacity(0.4), size: s.d(16)),
+                            )
+                          : null,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator(color: _kPurple))
-          : _filtered.isEmpty
-              ? Center(child: Text('No profile edits yet',
-                  style: TextStyle(color: _kInkFaint, fontSize: s.f(13))))
-              : ListView.builder(
-                  padding: EdgeInsets.fromLTRB(s.s(16), s.s(12), s.s(16), s.s(40)),
-                  itemCount: _filtered.length,
-                  itemBuilder: (_, i) => _RequestCard(
-                    // Keyed by proposalId (not list position) — after a
-                    // tick/cross, the list reloads and re-sorts by most
-                    // recently changed, which can jump this exact card to a
-                    // new position. Without this key, Flutter would treat
-                    // that as a brand new card and reset _expanded to
-                    // false, closing the dropdown right after the action.
-                    key: ValueKey(_filtered[i].proposalId),
-                    req: _filtered[i], s: s,
-                    onRevertField: (diff) => _revertField(_filtered[i], diff),
-                    onKeepField: (diff) => _keepField(_filtered[i], diff),
-                  ),
-                ),
+      body: _selectedTab == 0
+          ? (_loading
+              ? const Center(child: CircularProgressIndicator(color: _kPurple))
+              : _filtered.isEmpty
+                  ? Center(child: Text('No profile edits yet',
+                      style: TextStyle(color: _kInkFaint, fontSize: s.f(13))))
+                  : ListView.builder(
+                      padding: EdgeInsets.fromLTRB(s.s(16), s.s(12), s.s(16), s.s(40)),
+                      itemCount: _filtered.length,
+                      itemBuilder: (_, i) => _RequestCard(
+                        // Keyed by proposalId (not list position) — after a
+                        // tick/cross, the list reloads and re-sorts by most
+                        // recently changed, which can jump this exact card to a
+                        // new position. Without this key, Flutter would treat
+                        // that as a brand new card and reset _expanded to
+                        // false, closing the dropdown right after the action.
+                        key: ValueKey(_filtered[i].proposalId),
+                        req: _filtered[i], s: s,
+                        onRevertField: (diff) => _revertField(_filtered[i], diff),
+                        onKeepField: (diff) => _keepField(_filtered[i], diff),
+                      ),
+                    ))
+          : (_reportsLoading
+              ? const Center(child: CircularProgressIndicator(color: _kRose))
+              : _filteredReports.isEmpty
+                  ? Center(child: Text('No reports yet',
+                      style: TextStyle(color: _kInkFaint, fontSize: s.f(13))))
+                  : ListView.builder(
+                      padding: EdgeInsets.fromLTRB(s.s(16), s.s(12), s.s(16), s.s(40)),
+                      itemCount: _filteredReports.length,
+                      itemBuilder: (_, i) => _ReportCard(
+                        key: ValueKey(_filteredReports[i].id),
+                        report: _filteredReports[i],
+                        s: s,
+                        onSetStatus: (status) => _setReportStatus(_filteredReports[i], status),
+                      ),
+                    )),
     );
   }
 }
@@ -634,7 +851,7 @@ class _RequestCardState extends State<_RequestCard> {
                           Icon(diff.resolution == 'kept' ? Icons.check_circle_rounded : Icons.undo_rounded,
                               size: s.d(12), color: diff.resolution == 'kept' ? _kGreen : _kRose),
                           SizedBox(width: s.s(4)),
-                          Text(diff.resolution == 'kept' ? 'Approved' : 'Reverted',
+                          Text(diff.resolution == 'kept' ? 'Approved' : 'Rejected',
                               style: TextStyle(fontSize: s.f(10.5), color: diff.resolution == 'kept' ? _kGreen : _kRose, fontWeight: FontWeight.w700)),
                         ]),
                       )
@@ -828,3 +1045,124 @@ List<FieldChange> _sortedByProfileOrder(List<FieldChange> fields) {
   });
   return sorted;
 }
+
+// ── Report card ──────────────────────────────────────────────────────────
+class _ReportCard extends StatelessWidget {
+  final ProfileReport report;
+  final _S s;
+  final void Function(String status) onSetStatus;
+  const _ReportCard({super.key, required this.report, required this.s, required this.onSetStatus});
+
+  Color get _reasonColor {
+    switch (report.reason) {
+      case 'Fake Profile': return _kRose;
+      case 'Inappropriate Content': return _kRose;
+      case 'Falsified Information': return _kAmber;
+      case 'Spam or Scam': return _kAmber;
+      default: return _kInkFaint;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final resolved = report.status != 'pending';
+    return Container(
+      margin: EdgeInsets.only(bottom: s.s(12)),
+      padding: EdgeInsets.all(s.s(14)),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(s.s(14)),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${report.proposalName}  #${report.proposalNumber}',
+                  style: TextStyle(color: Colors.white, fontSize: s.f(14), fontWeight: FontWeight.w800),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Text(_timeAgo(report.createdAt), style: TextStyle(color: _kInkFaint, fontSize: s.f(11))),
+            ],
+          ),
+          if (report.proposalCity.isNotEmpty) ...[
+            SizedBox(height: s.s(2)),
+            Text(report.proposalCity, style: TextStyle(color: Colors.white54, fontSize: s.f(12))),
+          ],
+          SizedBox(height: s.s(10)),
+          Row(children: [
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: s.s(9), vertical: s.s(4)),
+              decoration: BoxDecoration(color: _reasonColor.withOpacity(0.15), borderRadius: BorderRadius.circular(s.s(20))),
+              child: Text(report.reason, style: TextStyle(color: _reasonColor, fontSize: s.f(11), fontWeight: FontWeight.w700)),
+            ),
+            SizedBox(width: s.s(8)),
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: s.s(9), vertical: s.s(4)),
+              decoration: BoxDecoration(
+                color: report.status == 'pending' ? _kAmber.withOpacity(0.15)
+                    : report.status == 'reviewed' ? _kGreen.withOpacity(0.15)
+                    : Colors.white.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(s.s(20)),
+              ),
+              child: Text(
+                report.status[0].toUpperCase() + report.status.substring(1),
+                style: TextStyle(
+                  color: report.status == 'pending' ? _kAmber : report.status == 'reviewed' ? _kGreen : _kInkFaint,
+                  fontSize: s.f(11), fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ]),
+          if (report.details != null && report.details!.isNotEmpty) ...[
+            SizedBox(height: s.s(10)),
+            Text(report.details!, style: TextStyle(color: Colors.white70, fontSize: s.f(12.5), height: 1.4)),
+          ],
+          if (!resolved) ...[
+            SizedBox(height: s.s(12)),
+            Row(children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => onSetStatus('dismissed'),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(vertical: s.s(9)),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(s.s(10)),
+                      border: Border.all(color: Colors.white.withOpacity(0.12)),
+                    ),
+                    child: Text('Dismiss', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: s.f(12.5), fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ),
+              SizedBox(width: s.s(8)),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => onSetStatus('reviewed'),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(vertical: s.s(9)),
+                    decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(s.s(10))),
+                    child: Text('Mark Reviewed', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: s.f(12.5), fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ),
+            ]),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 30) return '${diff.inDays}d ago';
+    return '${dt.day}/${dt.month}/${dt.year}';
+  }
+}
+

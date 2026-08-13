@@ -47,110 +47,65 @@ const String _adminUserCols = 'id,proposal_number,name,age,gender,city,country,c
     'subscription_start,subscription_expiry,amount_paid,'
     'featured_credits_purchased,featured_credits_used,deleted_from,'
     'deletion_reason,admin_notes,discarded,suggested_info,profile_photo_url,'
-    'cnic_front_url,cnic_back_url,applied_coupon_code';
+    'cnic_front_url,cnic_back_url,guardian_cnic_front_url,guardian_cnic_back_url,'
+    'education_document_url,applied_coupon_code,profession_category,registration_allowed,'
+    'submission_source';
 
 extension AdminSupabaseExtension on SupabaseService {
   Future<List<AdminUser>> fetchAdminUsers() async {
-    final List<Map<String, dynamic>> allProposals = [];
-    const int pageSize = 1000;
-    int offset = 0;
+    debugPrint('[fetchAdminUsers] Starting summary view fetch...');
 
-    debugPrint('[fetchAdminUsers] Starting pagination fetch...');
+    // Uses admin_proposals_summary view — only the ~22 columns needed to
+    // render the list card, instead of all 109 proposal columns.
+    // featured_boosts are joined server-side in the view itself.
+    // Result: one single network call, ~5x smaller payload, no pagination
+    // loop, no chunk fetches for related tables.
+    final res = await client
+        .from('admin_proposals_summary')
+        .select()
+        .order('updated_at', ascending: false);
 
-    // NOTE: no try/catch around the loop itself — if a page fails partway
-    // through, we want that error to propagate to the caller (AdminService
-    // .loadData(), which deliberately keeps the previously loaded _users on
-    // error) rather than swallow it here and return an empty list, which
-    // would wipe out every user the admin currently sees.
-    //
-    // This used to select proposals with subscriptions/featured_boosts/
-    // proposal_photos embedded directly in one nested query. That silently
-    // excluded any proposal with zero rows in ALL THREE related tables —
-    // a brand new registration, for instance, has no subscription yet, no
-    // boost, and often no separately-stored photo row, so it could vanish
-    // from this list entirely despite being a completely valid, visible-
-    // everywhere-else profile. Fetching the base proposals with a plain,
-    // un-joined select (identical in shape to what the public site already
-    // uses successfully) and merging the related tables in afterward
-    // guarantees a proposal can never be dropped just for lacking optional
-    // related data.
-    // Explicit column list — matches exactly what AdminUser.fromJson reads.
-    // Deliberately NOT select('*'): the three largest fields on this table
-    // (profile_photo_base64, cnic_front_base64, cnic_back_base64) are
-    // full images encoded as text, and as of this change nothing in the
-    // app reads them anymore — every photo now goes through Cloudflare R2
-    // and is referenced by URL instead. Downloading them here, for every
-    // single user, on every single admin screen load, was pure waste.
-    // (Column list itself now lives in the shared _adminUserCols constant
-    // above, so this fetch and the single-user realtime sync below always
-    // stay identical.)
-
-    while (true) {
-      final res = await client
-          .from('proposals')
-          .select(_adminUserCols)
-          .order('updated_at', ascending: false)
-          .range(offset, offset + pageSize - 1);
-
-      debugPrint('[fetchAdminUsers] Batch at offset=$offset returned ${res.length} records');
-
-      if (res.isEmpty) {
-        debugPrint('[fetchAdminUsers] No more records, stopping pagination');
-        break;
-      }
-
-      allProposals.addAll((res as List).cast<Map<String, dynamic>>());
-      offset += res.length;
-    }
-
-    final ids = allProposals.map((p) => p['id'] as String).toList();
-
-    // Related tables are fetched separately, in bulk, using an "in" filter
-    // rather than per-row — one query each instead of one per user.
-    final subsByUser = <String, List<Map<String, dynamic>>>{};
-    final boostsByUser = <String, List<Map<String, dynamic>>>{};
-    final photosByProposal = <String, List<Map<String, dynamic>>>{};
-
-    if (ids.isNotEmpty) {
-      // Chunked rather than one call with all ~1300+ ids at once — a
-      // single inFilter with every id would produce an extremely long
-      // URL, which risks silently failing (or being truncated) as the
-      // proposals table keeps growing. 200 per batch stays comfortably
-      // within normal URL length limits regardless of total row count.
-      const chunkSize = 200;
-      for (var i = 0; i < ids.length; i += chunkSize) {
-        final chunk = ids.sublist(i, i + chunkSize > ids.length ? ids.length : i + chunkSize);
-
-        final subs = await client.from('subscriptions').select('*').inFilter('user_id', chunk);
-        for (final row in (subs as List).cast<Map<String, dynamic>>()) {
-          subsByUser.putIfAbsent(row['user_id'] as String, () => []).add(row);
-        }
-
-        final boosts = await client.from('featured_boosts').select('*').inFilter('user_id', chunk);
-        for (final row in (boosts as List).cast<Map<String, dynamic>>()) {
-          boostsByUser.putIfAbsent(row['user_id'] as String, () => []).add(row);
-        }
-
-        final photos = await client.from('proposal_photos').select('*').inFilter('proposal_id', chunk);
-        for (final row in (photos as List).cast<Map<String, dynamic>>()) {
-          photosByProposal.putIfAbsent(row['proposal_id'] as String, () => []).add(row);
-        }
-      }
-    }
-
-    final allUsers = allProposals.map((row) {
-      final id = row['id'] as String;
-      final merged = {
-        ...row,
-        'subscriptions': subsByUser[id] ?? [],
-        'featured_boosts': boostsByUser[id] ?? [],
-        'proposal_photos': photosByProposal[id] ?? [],
-      };
-      return AdminUser.fromJson(merged);
+    final allUsers = (res as List).map((row) {
+      final map = Map<String, dynamic>.from(row as Map);
+      final boostsRaw = map['featured_boosts'];
+      map['featured_boosts'] = boostsRaw is List
+          ? boostsRaw
+          : (boostsRaw != null ? List<dynamic>.from(boostsRaw as Iterable) : []);
+      map['subscriptions'] = [];
+      map['proposal_photos'] = [];
+      return AdminUser.fromJson(map);
     }).toList();
 
     debugPrint('[fetchAdminUsers] ✅ Total users fetched: ${allUsers.length}');
     return allUsers;
+  }
+
+  // Incremental fetch — only rows updated since [since].
+  // Returns a small list (typically 0–10 rows) that the caller merges into
+  // the existing local list. Same view, same fromJson — just filtered.
+  Future<List<AdminUser>> fetchAdminUsersSince(DateTime since) async {
+    final sinceIso = since.toUtc().toIso8601String();
+    debugPrint('[fetchAdminUsers] Incremental fetch since $sinceIso');
+
+    final res = await client
+        .from('admin_proposals_summary')
+        .select()
+        .gt('updated_at', sinceIso)
+        .order('updated_at', ascending: false);
+
+    final changed = (res as List).map((row) {
+      final map = Map<String, dynamic>.from(row as Map);
+      final boostsRaw = map['featured_boosts'];
+      map['featured_boosts'] = boostsRaw is List
+          ? boostsRaw
+          : (boostsRaw != null ? List<dynamic>.from(boostsRaw as Iterable) : []);
+      map['subscriptions'] = [];
+      map['proposal_photos'] = [];
+      return AdminUser.fromJson(map);
+    }).toList();
+
+    debugPrint('[fetchAdminUsers] Incremental: ${changed.length} changed rows');
+    return changed;
   }
 
   // Fetches exactly one user's full data — same columns, same related-table
@@ -223,9 +178,10 @@ extension AdminSupabaseExtension on SupabaseService {
 
   Future<void> createCouponCode(
     String code, {
-    required String type, // 'percentage' or 'free_days'
+    required String type, // 'percentage', 'free_days', or 'free_trial'
     int? discountPercent,
     int? freeDays,
+    int? trialDays,
     DateTime? expiresAt,
   }) async {
     await client.from('coupon_codes').insert({
@@ -233,6 +189,7 @@ extension AdminSupabaseExtension on SupabaseService {
       'coupon_type': type,
       if (type == 'percentage') 'discount_percent': discountPercent,
       if (type == 'free_days') 'free_days': freeDays,
+      if (type == 'free_trial') 'trial_days': trialDays,
       if (expiresAt != null) 'expires_at': expiresAt.toUtc().toIso8601String(),
     });
     notify();

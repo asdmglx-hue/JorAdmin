@@ -1004,7 +1004,8 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
     final codeCtrl = TextEditingController();
     final percentCtrl = TextEditingController();
     final freeDaysCtrl = TextEditingController();
-    String couponType = 'percentage'; // or 'free_days'
+    final trialDaysCtrl = TextEditingController();
+    String couponType = 'percentage'; // 'percentage', 'free_days', or 'free_trial'
     String? errorText;
     DateTime? expiresAt;
 
@@ -1012,10 +1013,19 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setDialogState) {
         final s = _S.of(ctx);
-        return Dialog(
+        return AnimatedPadding(
+          padding: EdgeInsets.fromLTRB(24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 24),
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          child: MediaQuery.removeViewInsets(
+            removeBottom: true,
+            context: ctx,
+            child: Dialog(
           backgroundColor: const Color(0xFF1E1A33),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: Padding(
+          insetPadding: EdgeInsets.zero,
+          child: SingleChildScrollView(
+            child: Padding(
             padding: EdgeInsets.all(s.s(20)),
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('New Coupon Code', style: TextStyle(fontSize: s.f(16), fontWeight: FontWeight.w800, color: Colors.white)),
@@ -1047,10 +1057,10 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
                       borderRadius: BorderRadius.circular(s.s(10)),
                       border: Border.all(color: couponType == 'percentage' ? kPurple : Colors.transparent),
                     ),
-                    child: Center(child: Text('% Discount', style: TextStyle(color: couponType == 'percentage' ? kPurple : Colors.white.withOpacity(0.5), fontWeight: FontWeight.w700, fontSize: s.f(12.5)))),
+                    child: Center(child: Text('% Discount', style: TextStyle(color: couponType == 'percentage' ? kPurple : Colors.white.withOpacity(0.5), fontWeight: FontWeight.w700, fontSize: s.f(11)))),
                   ),
                 )),
-                SizedBox(width: s.s(8)),
+                SizedBox(width: s.s(6)),
                 Expanded(child: GestureDetector(
                   onTap: () => setDialogState(() => couponType = 'free_days'),
                   child: Container(
@@ -1060,7 +1070,20 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
                       borderRadius: BorderRadius.circular(s.s(10)),
                       border: Border.all(color: couponType == 'free_days' ? kPurple : Colors.transparent),
                     ),
-                    child: Center(child: Text('Free Days', style: TextStyle(color: couponType == 'free_days' ? kPurple : Colors.white.withOpacity(0.5), fontWeight: FontWeight.w700, fontSize: s.f(12.5)))),
+                    child: Center(child: Text('Bonus Days', style: TextStyle(color: couponType == 'free_days' ? kPurple : Colors.white.withOpacity(0.5), fontWeight: FontWeight.w700, fontSize: s.f(11)))),
+                  ),
+                )),
+                SizedBox(width: s.s(6)),
+                Expanded(child: GestureDetector(
+                  onTap: () => setDialogState(() => couponType = 'free_trial'),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(vertical: s.s(10)),
+                    decoration: BoxDecoration(
+                      color: couponType == 'free_trial' ? kPurple.withOpacity(0.2) : Colors.white.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(s.s(10)),
+                      border: Border.all(color: couponType == 'free_trial' ? kPurple : Colors.transparent),
+                    ),
+                    child: Center(child: Text('Free Trial', style: TextStyle(color: couponType == 'free_trial' ? kPurple : Colors.white.withOpacity(0.5), fontWeight: FontWeight.w700, fontSize: s.f(11)))),
                   ),
                 )),
               ]),
@@ -1081,8 +1104,11 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(s.s(10)), borderSide: BorderSide.none),
                   ),
                 ),
-              ] else ...[
-                Text('Free days', style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.7))),
+                SizedBox(height: s.s(6)),
+                Text('Reduce the plan price by this percentage — user pays less.',
+                  style: TextStyle(fontSize: s.f(10.5), color: Colors.white.withOpacity(0.35))),
+              ] else if (couponType == 'free_days') ...[
+                Text('Bonus days', style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.7))),
                 SizedBox(height: s.s(6)),
                 TextField(
                   controller: freeDaysCtrl,
@@ -1098,7 +1124,26 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
                   ),
                 ),
                 SizedBox(height: s.s(6)),
-                Text('Adds this many bonus days on top of the normal plan duration — the price they pay stays the same, they just get extra free time.',
+                Text('Add this many bonus days on top of the normal plan duration.',
+                  style: TextStyle(fontSize: s.f(10.5), color: Colors.white.withOpacity(0.35))),
+              ] else ...[
+                Text('Trial days', style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.7))),
+                SizedBox(height: s.s(6)),
+                TextField(
+                  controller: trialDaysCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  style: TextStyle(color: Colors.white, fontSize: s.f(14)),
+                  decoration: InputDecoration(
+                    hintText: 'e.g. 7',
+                    hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                    filled: true, fillColor: Colors.white.withOpacity(0.05),
+                    contentPadding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(10)),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(s.s(10)), borderSide: BorderSide.none),
+                  ),
+                ),
+                SizedBox(height: s.s(6)),
+                Text('User gets free access for this many days — no payment required.',
                   style: TextStyle(fontSize: s.f(10.5), color: Colors.white.withOpacity(0.35))),
               ],
               SizedBox(height: s.s(14)),
@@ -1151,16 +1196,20 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
 
                     int? pct;
                     int? freeDays;
+                    int? trialDays;
                     if (couponType == 'percentage') {
                       pct = int.tryParse(percentCtrl.text.trim());
                       if (pct == null || pct <= 0 || pct > 100) { setDialogState(() => errorText = 'Enter a discount between 1–100'); return; }
-                    } else {
+                    } else if (couponType == 'free_days') {
                       freeDays = int.tryParse(freeDaysCtrl.text.trim());
-                      if (freeDays == null || freeDays <= 0) { setDialogState(() => errorText = 'Enter a number of free days'); return; }
+                      if (freeDays == null || freeDays <= 0) { setDialogState(() => errorText = 'Enter a number of bonus days'); return; }
+                    } else {
+                      trialDays = int.tryParse(trialDaysCtrl.text.trim());
+                      if (trialDays == null || trialDays <= 0) { setDialogState(() => errorText = 'Enter a number of trial days'); return; }
                     }
 
                     try {
-                      await _db.createCouponCode(code, type: couponType, discountPercent: pct, freeDays: freeDays, expiresAt: expiresAt);
+                      await _db.createCouponCode(code, type: couponType, discountPercent: pct, freeDays: freeDays, trialDays: trialDays, expiresAt: expiresAt);
                       if (ctx.mounted) Navigator.pop(ctx, true);
                     } catch (e) {
                       final msg = e.toString().contains('duplicate') || e.toString().contains('unique')
@@ -1181,7 +1230,10 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
               ]),
             ]),
           ),
-        );
+          ),
+          ),
+        ),
+      );
       }),
     );
 
@@ -1273,7 +1325,7 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
                         padding: EdgeInsets.symmetric(horizontal: s.s(8), vertical: s.s(2)),
                         decoration: BoxDecoration(color: kPurple.withOpacity(0.15), borderRadius: BorderRadius.circular(s.s(6))),
                         child: Text(
-                          c.isPercentage ? '${c.discountPercent}% off' : '${c.freeDays} days free',
+                          c.isPercentage ? '${c.discountPercent}% off' : c.isFreeTrial ? '${c.trialDays} day trial' : '${c.freeDays} bonus days',
                           style: TextStyle(color: kPurple, fontWeight: FontWeight.w700, fontSize: s.f(11)),
                         ),
                       ),

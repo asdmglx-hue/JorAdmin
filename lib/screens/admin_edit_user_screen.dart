@@ -1,6 +1,7 @@
 import 'dart:typed_data';
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../widgets/photo_crop_dialog.dart';
@@ -9,6 +10,7 @@ import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../models/admin_models.dart';
 import '../services/supabase_service.dart';
+import '../services/admin_supabase_extension.dart';
 import '../widgets/country_picker.dart';
 import '../widgets/occupation_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -50,7 +52,11 @@ class _AdminCnicFormatter extends TextInputFormatter {
 // Re-applies the CNIC formatter to a value that was set directly on a
 // controller (e.g. existing data loaded on screen open), so it looks
 // correctly formatted immediately rather than only after the admin edits it.
-String _formatCnicDisplay(String raw) =>
+// Public (no leading underscore) since admin_users_screen.dart's user list
+// also needs this same display-time formatting — the cnic column itself is
+// always stored as clean digits (enforced by a database trigger), so every
+// place that shows it to a human needs to format it, not just this screen.
+String formatCnicDisplay(String raw) =>
     _AdminCnicFormatter().formatEditUpdate(const TextEditingValue(text: ''), TextEditingValue(text: raw)).text;
 
 // Re-applies the same Pakistani spacing used on the Submit Proposal form to
@@ -72,6 +78,8 @@ class AdminEditUserScreen extends StatefulWidget {
 
 class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   late AdminUser _user;
+  late AdminUser _baseline; // what we compare against for _hasChanges
+  bool _fullDataLoaded = false; // true once background full-row fetch completes
 
   // Country code for the phone fields (mirrors the Submit Proposal form's
   // country picker in the user app).
@@ -122,6 +130,8 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   void initState() {
     super.initState();
     _user = widget.user;
+    _baseline = widget.user;
+    _refreshCnicStatus();
     _nameCtrl     = TextEditingController(text: _user.name);
     _ageCtrl      = TextEditingController(text: _user.age.toString());
     // Phone numbers may be stored as "{dialCode} {digits}" (numbers that
@@ -151,7 +161,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     }
     if (_selectedCountry2.dialCode == '+92') _phone2Ctrl.text = _formatPakDisplay(_phone2Ctrl.text);
 
-    _cnicCtrl     = TextEditingController(text: _formatCnicDisplay(_user.cnic ?? ''));
+    _cnicCtrl     = TextEditingController(text: formatCnicDisplay(_user.cnic ?? ''));
     _passwordCtrl = TextEditingController(text: _user.password ?? '');
     // Height: store inches internally, display as feet/inches in read-only
     final h = _user.heightInches.round();
@@ -201,6 +211,87 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       _adminNotesCtrl, _locationCtrl, _disabilityDetailsCtrl, _countryCtrl,
       _professionCtrl, _professionCustomCtrl, _fatherOccCtrl, _motherOccCtrl,
     ]) { c.addListener(_onFieldChanged); }
+  }
+
+  // The AdminUser object this screen opens with (widget.user) can be
+  // stale — it's whatever the Users list had cached at the moment it was
+  // fetched, which may be from before a CNIC verification request got
+  // approved elsewhere (the Verify tab). That approval updates the
+  // database correctly and immediately, but this screen wouldn't know
+  // until now. Rather than restructure the whole (synchronous,
+  // controller-heavy) initState into an async-loading screen just for
+  // this, this quietly re-fetches in the background and patches in just
+  // the CNIC fields once they arrive — everything else the person may
+  // already be mid-editing stays untouched.
+  Future<void> _refreshCnicStatus() async {
+    try {
+      final fresh = await SupabaseService.instance.fetchSingleAdminUser(widget.user.id);
+      if (fresh == null || !mounted) return;
+      // Patch in the full profile data that wasn't in the summary view.
+      // Controllers are only updated if the admin hasn't started editing
+      // them yet (_hasChanges is still false at this point on fresh open).
+      if (!_fullDataLoaded) {
+          // Temporarily remove listeners so controller updates don't trigger
+          // _onFieldChanged and falsely activate the Save button.
+          final ctrls = [
+            _nameCtrl, _ageCtrl, _phoneCtrl, _phone2Ctrl, _cnicCtrl, _passwordCtrl, _heightCtrl, _weightCtrl,
+            _aboutCtrl, _lookingForCtrl, _instCtrl, _degreeTitleCtrl, _inst2Ctrl, _degreeTitle2Ctrl,
+            _inst3Ctrl, _degreeTitle3Ctrl, _boysCtrl, _girlsCtrl, _houseSizeCtrl, _carCtrl,
+            _brothersCtrl, _sistersCtrl, _adminNotesCtrl, _locationCtrl, _disabilityDetailsCtrl,
+            _countryCtrl, _professionCtrl, _professionCustomCtrl, _fatherOccCtrl, _motherOccCtrl,
+            _passwordCtrl,
+          ];
+          for (final c in ctrls) c.removeListener(_onFieldChanged);
+
+          // Always update password from fresh data regardless of _fullDataLoaded
+          _passwordCtrl.text = fresh.password ?? '';
+
+          _ageCtrl.text = fresh.age.toString();
+          _aboutCtrl.text = fresh.about ?? '';
+          _lookingForCtrl.text = fresh.lookingFor ?? '';
+          _instCtrl.text = fresh.institute ?? '';
+          _degreeTitleCtrl.text = fresh.degreeTitle ?? '';
+          _inst2Ctrl.text = fresh.institute2 ?? '';
+          _degreeTitle2Ctrl.text = fresh.degreeTitle2 ?? '';
+          _inst3Ctrl.text = fresh.institute3 ?? '';
+          _degreeTitle3Ctrl.text = fresh.degreeTitle3 ?? '';
+          _boysCtrl.text = fresh.boys?.toString() ?? '';
+          _girlsCtrl.text = fresh.girls?.toString() ?? '';
+          _houseSizeCtrl.text = fresh.houseSize ?? '';
+          _carCtrl.text = fresh.carName ?? '';
+          _brothersCtrl.text = (fresh.brothers == 0 || fresh.brothers == null) ? '' : fresh.brothers.toString();
+          _sistersCtrl.text = (fresh.sisters == 0 || fresh.sisters == null) ? '' : fresh.sisters.toString();
+          _locationCtrl.text = fresh.location ?? '';
+          _countryCtrl.text = fresh.country ?? '';
+          _disabilityDetailsCtrl.text = fresh.disabilityDetails ?? '';
+          _professionCtrl.text = fresh.profession;
+          _fatherOccCtrl.text = fresh.fatherOccupation ?? '';
+          _motherOccCtrl.text = fresh.motherOccupation ?? '';
+          _weightCtrl.text = fresh.weightKg?.toString() ?? '';
+          final h = fresh.heightInches.round();
+          final ft = h ~/ 12; final inch = h % 12;
+          _heightCtrl.text = "${ft}'${inch}\"";
+
+          // Re-add listeners after all updates are done
+          for (final c in ctrls) c.addListener(_onFieldChanged);
+        }
+
+      setState(() {
+        _user = fresh;
+        if (!_fullDataLoaded) {
+          _siblingsVal  = fresh.hasSiblings == true ? 'Yes' : (fresh.hasSiblings == false ? 'No' : '');
+          _houseVal     = fresh.homeType ?? '';
+          _fatherVal    = fresh.fatherAlive == true ? 'Alive' : (fresh.fatherAlive == false ? 'Deceased' : '');
+          _motherVal    = fresh.motherAlive == true ? 'Alive' : (fresh.motherAlive == false ? 'Deceased' : '');
+          _disabilityVal = fresh.hasDisability ?? '';
+          _professionCategory = fresh.professionCategory ?? '';
+          _fullDataLoaded = true;
+          _baseline = fresh; // update comparison baseline to full data
+        }
+      });
+    } catch (_) {
+      // Silent — background freshness load, screen still works with summary data.
+    }
   }
 
   void _onFieldChanged() {
@@ -296,7 +387,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
   bool get _hasChanges {
     final a = jsonEncode(_normalizedForCompare(_buildUpdated().toUpdateJson()));
-    final b = jsonEncode(_normalizedForCompare(widget.user.toUpdateJson()));
+    final b = jsonEncode(_normalizedForCompare(_baseline.toUpdateJson()));
     return a != b;
   }
 
@@ -383,7 +474,21 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
             FilteringTextInputFormatter.allow(RegExp(r'[\d-]')),
             _AdminCnicFormatter(),
           ]),
-          _field('Password', _passwordCtrl),
+          _field('Password', _passwordCtrl, suffix: GestureDetector(
+            onTap: () {
+              const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+              final rand = Random.secure();
+              final newPassword = List.generate(8, (_) => chars[rand.nextInt(chars.length)]).join();
+              _passwordCtrl.removeListener(_onFieldChanged);
+              _passwordCtrl.text = newPassword;
+              _passwordCtrl.addListener(_onFieldChanged);
+              setState(() { _user = _user.copyWith(password: newPassword); });
+            },
+            child: const Padding(
+              padding: EdgeInsets.only(right: 12),
+              child: Icon(Icons.refresh_rounded, size: 18, color: kPurple),
+            ),
+          )),
           _drop('Gender', _user.gender, ['Male', 'Female'],
               (v) => setState(() => _user = _user.copyWith(gender: v))),
           _field('Country', _countryCtrl),
@@ -460,6 +565,9 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           SizedBox(height: _S.of(context).s(16)),
           _mainHeader('Verification'),
           SizedBox(height: _S.of(context).s(8)),
+          Text('Marriage-seeking Person', style: TextStyle(fontSize: _S.of(context).f(11.5), fontWeight: FontWeight.w600,
+              color: Colors.white.withOpacity(0.5))),
+          SizedBox(height: _S.of(context).s(8)),
           Row(
             children: [
               Expanded(child: _EditablePhotoSlot(
@@ -478,6 +586,34 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
                 cnicOrId: _user.cnic ?? _user.id,
                 photoType: 'cnic_back',
                 onChanged: (url) => setState(() => _user = _user.copyWith(cnicBack: url)),
+              )),
+            ],
+          ),
+          SizedBox(height: _S.of(context).s(10)),
+          _certField(label: 'Education Document', url: _user.educationDocument, cnicOrId: _user.cnic ?? _user.id,
+            photoType: 'education_document', onChanged: (url) => setState(() => _user = _user.copyWith(educationDocument: url))),
+          SizedBox(height: _S.of(context).s(6)),
+          Text('Parent / Guardian', style: TextStyle(fontSize: _S.of(context).f(11.5), fontWeight: FontWeight.w600,
+              color: Colors.white.withOpacity(0.5))),
+          SizedBox(height: _S.of(context).s(8)),
+          Row(
+            children: [
+              Expanded(child: _EditablePhotoSlot(
+                label: 'CNIC Front',
+                icon: Icons.credit_card_rounded,
+                photoUrl: _user.guardianCnicFront,
+                cnicOrId: _user.cnic ?? _user.id,
+                photoType: 'guardian_cnic_front',
+                onChanged: (url) => setState(() => _user = _user.copyWith(guardianCnicFront: url)),
+              )),
+              SizedBox(width: _S.of(context).s(10)),
+              Expanded(child: _EditablePhotoSlot(
+                label: 'CNIC Back',
+                icon: Icons.credit_card_rounded,
+                photoUrl: _user.guardianCnicBack,
+                cnicOrId: _user.cnic ?? _user.id,
+                photoType: 'guardian_cnic_back',
+                onChanged: (url) => setState(() => _user = _user.copyWith(guardianCnicBack: url)),
               )),
             ],
           ),
@@ -665,7 +801,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               onTap: () async {
                 try {
                   await launchUrl(Uri.parse('https://wa.me/$waNumber'),
-                      mode: LaunchMode.externalApplication);
+                      mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication);
                 } catch (_) {}
               },
               child: Container(
@@ -813,7 +949,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
             _pPhoneRow('Phone', u.contactPhone),
           if (u.contactPhone2 != null && u.contactPhone2!.isNotEmpty)
             _pPhoneRow('Phone 2', u.contactPhone2!),
-          if (u.cnic != null && u.cnic!.isNotEmpty) _pR('CNIC', u.cnic!),
+          if (u.cnic != null && u.cnic!.isNotEmpty) _pR('CNIC', formatCnicDisplay(u.cnic!)),
           if (u.password != null && u.password!.isNotEmpty) _pR('Password', u.password!),
           if (u.country != null && u.country!.isNotEmpty) _pR('Country', u.country!),
           _pR('City', u.city),
@@ -909,12 +1045,34 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       // ── CNIC Photos ──
       if (u.cnicFront != null || u.cnicBack != null) ...[
         SizedBox(height: s.s(16)),
+        Text('Marriage-seeking Person', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        SizedBox(height: s.s(4)),
         Text('CNIC', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
         SizedBox(height: s.s(8)),
         Row(children: [
           if (u.cnicFront != null) Expanded(child: _AdminPhotoSlot(label: 'Front', icon: Icons.credit_card_rounded, photoUrl: u.cnicFront)),
           if (u.cnicFront != null && u.cnicBack != null) SizedBox(width: s.s(10)),
           if (u.cnicBack != null) Expanded(child: _AdminPhotoSlot(label: 'Back', icon: Icons.credit_card_rounded, photoUrl: u.cnicBack)),
+        ]),
+      ],
+
+      // ── Education Document ──
+      if (u.educationDocument != null) ...[
+        SizedBox(height: s.s(16)),
+        Text('Education Document', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        SizedBox(height: s.s(8)),
+        Row(children: [Expanded(child: _AdminPhotoSlot(label: 'Document', icon: Icons.description_outlined, photoUrl: u.educationDocument))]),
+      ],
+
+      // ── Guardian CNIC Photos ──
+      if (u.guardianCnicFront != null || u.guardianCnicBack != null) ...[
+        SizedBox(height: s.s(16)),
+        Text('Parent / Guardian CNIC', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        SizedBox(height: s.s(8)),
+        Row(children: [
+          if (u.guardianCnicFront != null) Expanded(child: _AdminPhotoSlot(label: 'Front', icon: Icons.credit_card_rounded, photoUrl: u.guardianCnicFront)),
+          if (u.guardianCnicFront != null && u.guardianCnicBack != null) SizedBox(width: s.s(10)),
+          if (u.guardianCnicBack != null) Expanded(child: _AdminPhotoSlot(label: 'Back', icon: Icons.credit_card_rounded, photoUrl: u.guardianCnicBack)),
         ]),
       ],
 
@@ -1144,7 +1302,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     );
   }
 
-  Widget _field(String label, TextEditingController ctrl, {TextInputType? type, List<TextInputFormatter>? formatters}) {
+  Widget _field(String label, TextEditingController ctrl, {TextInputType? type, List<TextInputFormatter>? formatters, Widget? suffix}) {
     if (widget.readOnly) return _viewValue(label, ctrl.text);
     final s = _S.of(context);
     return Padding(
@@ -1159,7 +1317,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
             keyboardType: type,
             inputFormatters: formatters,
             style: TextStyle(color: Colors.white, fontSize: s.f(13.5)),
-            decoration: _inputDeco(),
+            decoration: _inputDeco().copyWith(suffixIcon: suffix),
           ),
         ],
       ),
@@ -1543,9 +1701,10 @@ class _EditablePhotoSlotState extends State<_EditablePhotoSlot> {
         SizedBox(height: s.s(8)),
         Container(width: s.d(40), height: s.d(4), decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(s.s(2)))),
         SizedBox(height: s.s(16)),
-        ListTile(leading: const Icon(Icons.camera_alt_rounded, color: kPurple),
+        if (!kIsWeb) ListTile(leading: const Icon(Icons.camera_alt_rounded, color: kPurple),
           title: const Text('Take Photo', style: TextStyle(color: Colors.white)),
           onTap: () { Navigator.pop(context); _pick(ImageSource.camera); }),
+        if (!kIsWeb) // camera hidden on web — only shown on mobile
         ListTile(leading: const Icon(Icons.photo_library_rounded, color: kPurple),
           title: const Text('Choose from Gallery', style: TextStyle(color: Colors.white)),
           onTap: () { Navigator.pop(context); _pick(ImageSource.gallery); }),
@@ -1808,9 +1967,13 @@ class _HeightDropdownsState extends State<_HeightDropdowns> {
     if (m != null) {
       final f = int.parse(m.group(1)!);
       final i = int.parse(m.group(2)!);
-      if (f != _feet || i != _inches) {
+      // Guard against out-of-range values (e.g. 0 from summary data before
+      // full load arrives) — show hint instead of crashing the dropdown.
+      final fValid = f >= 4 && f <= 7 ? f : null;
+      final iValid = i >= 0 && i <= 11 ? i : null;
+      if (fValid != _feet || iValid != _inches) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() { _feet = f; _inches = i; });
+          if (mounted) setState(() { _feet = fValid; _inches = iValid; });
         });
       }
     }

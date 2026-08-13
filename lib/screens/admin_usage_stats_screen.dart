@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../utils/theme.dart';
 import '../services/supabase_service.dart';
 
@@ -528,7 +529,7 @@ class _AdminUsageStatsScreenState extends State<AdminUsageStatsScreen> {
     // upfront and just making the real source one tap away instead.
     const url = 'https://supabase.com/dashboard/org/kscqrremkytftooljfda/usage#egress';
     return GestureDetector(
-      onTap: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      onTap: () => launchUrl(Uri.parse(url), mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(color: const Color(0xFF1E1A33), borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.white.withOpacity(0.06))),

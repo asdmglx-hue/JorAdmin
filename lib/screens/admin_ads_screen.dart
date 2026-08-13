@@ -1,5 +1,5 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/theme.dart';
@@ -330,7 +330,8 @@ class _AdFormState extends State<_AdForm> {
   bool _published = true;
   bool _saving = false;
   bool _uploading = false;
-  String? _mediaPath; // local path of a newly-picked file, pending upload
+  String? _mediaPath;
+  Uint8List? _mediaBytes; // local path of a newly-picked file, pending upload
   String? _existingMediaUrl;
 
   @override
@@ -375,7 +376,7 @@ class _AdFormState extends State<_AdForm> {
     if (_mediaPath != null) {
       setState(() => _uploading = true);
       try {
-        final bytes = await File(_mediaPath!).readAsBytes();
+        final bytes = _mediaBytes!;
         mediaUrl = await SupabaseService.instance.uploadAdMedia(bytes, isVideo: _isVideo);
       } catch (e) {
         setState(() { _saving = false; _uploading = false; });
@@ -485,7 +486,7 @@ class _AdFormState extends State<_AdForm> {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.white.withOpacity(0.1)),
                   image: !_isVideo && _mediaPath != null
-                    ? DecorationImage(image: FileImage(File(_mediaPath!)), fit: BoxFit.cover)
+                    ? DecorationImage(image: _mediaBytes != null ? MemoryImage(_mediaBytes!) : const AssetImage('') as ImageProvider, fit: BoxFit.cover)
                     : (!_isVideo && _existingMediaUrl != null
                         ? DecorationImage(image: NetworkImage(_existingMediaUrl!), fit: BoxFit.cover)
                         : null),

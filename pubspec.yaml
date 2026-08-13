@@ -35,6 +35,10 @@ flutter:
     - assets/logo/logo.png
     - assets/icons/
     - assets/icon/
+  fonts:
+    - family: MaterialIcons
+      fonts:
+        - asset: fonts/MaterialIcons-Regular.otf
 
 flutter_launcher_icons:
   android: true

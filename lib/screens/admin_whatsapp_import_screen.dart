@@ -1,6 +1,7 @@
+import 'dart:typed_data';
 // lib/screens/admin/admin_whatsapp_import_screen.dart
 import 'dart:convert';
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import '../widgets/photo_crop_dialog.dart';
 import '../services/admin_service.dart';
 import '../utils/theme.dart';
 import '../services/supabase_service.dart';
+import '../widgets/country_picker.dart' show CountryCode;
 
 // Claude API key — same as ai_parse_service.dart
 const _kClaudeKey = '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';
@@ -56,7 +58,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
   String _inputMode = 'paste';
 
   // Photos
-  File? _profilePhoto;
+  Uint8List? _profilePhoto;
 
   // Text controllers
   final _nameCtrl        = TextEditingController();
@@ -126,7 +128,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
     setState(() { _step = 1; _errorMsg = null; _scanning = true; });
 
     try {
-      final bytes = await File(picked.path).readAsBytes();
+      final bytes = await picked.readAsBytes();
       final base64Data = base64Encode(bytes);
       final mediaType = choice == 'pdf' ? 'application/pdf' : 'image/jpeg';
       final msgType  = choice == 'pdf' ? 'document' : 'image';
@@ -168,7 +170,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
   Future<void> _captureAndScan() async {
     // Use image_picker camera — no extra package needed
     final picked = await ImagePicker().pickImage(
-      source: ImageSource.camera,
+      source: kIsWeb ? ImageSource.gallery : ImageSource.camera,
       imageQuality: 85,
       maxWidth: 1200,
       maxHeight: 1200,
@@ -181,7 +183,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
     setState(() { _step = 1; _errorMsg = null; _scanning = true; _scanMode = false; });
 
     try {
-      final bytes = await File(picked.path).readAsBytes();
+      final bytes = await picked.readAsBytes();
       final base64Image = base64Encode(bytes);
 
       final response = await http.post(
@@ -243,15 +245,11 @@ class _State extends State<AdminWhatsAppImportScreen> {
     if (picked == null) return;
 
     if (type == 'profile') {
-      // Show zoom & crop dialog for profile photo — same as submit proposal screen
-      final bytes = await File(picked.path).readAsBytes();
+      final bytes = await picked.readAsBytes();
       if (!mounted) return;
       final cropped = await showPhotoCropDialog(context, bytes);
-      if (cropped == null) return; // user cancelled
-      // Save cropped bytes as a temp file
-      final tmpPath = '${picked.path}_cropped.png';
-      await File(tmpPath).writeAsBytes(cropped);
-      setState(() => _profilePhoto = File(tmpPath));
+      if (cropped == null) return;
+      setState(() => _profilePhoto = cropped);
     } else {
       setState(() {
       });
@@ -263,7 +261,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
     if (msg.isEmpty) { setState(() => _errorMsg = 'Please paste the message or document first'); return; }
     setState(() { _step = 1; _errorMsg = null; });
     try {
-      final r = await parseWhatsAppProposal(message: msg, photoFile: _profilePhoto);
+      final r = await parseWhatsAppProposal(message: msg, photoBytes: _profilePhoto);
       _fillForm(r);
       setState(() => _step = 2);
     } catch (e) {
@@ -335,6 +333,114 @@ class _State extends State<AdminWhatsAppImportScreen> {
     return alive.toLowerCase() == 'yes' ? 'Alive' : 'Deceased';
   }
 
+  // Normalizes a raw phone number (however the AI extraction happened to
+  // format it) into the "+CC digits" format the rest of the app expects
+  // (proposals_feed's mask_phone() and RishtaProposal.maskedPhone both
+  // assume this shape — anything else falls back to a default +92 country
+  // code regardless of the person's actual country, which is exactly the
+  // bug that caused 100 AI-imported overseas profiles to show the wrong
+  // country code on their masked number).
+  //
+  // The number's OWN shape decides the format — NOT the Country field.
+  // An overseas Pakistani very often keeps and shares their original
+  // Pakistani number, so this never forces a foreign dial code onto a
+  // number that already looks Pakistani just because Country says
+  // "abroad". The Country field is only consulted when the digits
+  // themselves don't already look Pakistani.
+  String _normalizePhone(String raw, String country) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return trimmed;
+
+    // Already in "+CC ..." form — trust it, just tidy the spacing.
+    if (trimmed.startsWith('+')) {
+      final digits = trimmed.replaceAll(RegExp(r'[^\d]'), '');
+      return '+$digits'.isNotEmpty ? _spaceOutPhone(digits) : trimmed;
+    }
+
+    final digits = trimmed.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.isEmpty) return trimmed;
+
+    // STEP 1 — does the number ITSELF look Pakistani, regardless of what
+    // Country says? Covers 03XXXXXXXXX (11 digits), 92/0092 + 3XX
+    // mobile prefix, or a bare 10-digit number starting with 3.
+    final looksPakistani =
+        (digits.startsWith('03') && digits.length == 11) ||
+        (digits.startsWith('923') && digits.length == 12) ||
+        (digits.startsWith('00923') && digits.length == 14) ||
+        (digits.startsWith('3') && digits.length == 10);
+
+    final countryIsPakistan = country.trim().isEmpty || country.trim().toLowerCase() == 'pakistan';
+
+    if (looksPakistani || countryIsPakistan) {
+      // Pakistani mobile: normalize 0300..., 92300..., 0092300..., or
+      // bare 300... all to +92 3XXXXXXXXX.
+      var local = digits;
+      if (local.startsWith('0092')) {
+        local = local.substring(4);
+      } else if (local.startsWith('92')) {
+        local = local.substring(2);
+      } else if (local.startsWith('0')) {
+        local = local.substring(1);
+      }
+      return _spaceOutPhone('92$local');
+    }
+
+    // STEP 2 — number doesn't look Pakistani; use the stated country to
+    // pick the right dial code, stripping any leading 0/00 trunk digits
+    // from the local number first (those are meaningless once a country
+    // code is added).
+    final dialDigits = _dialCodeForCountry(country);
+    if (dialDigits == null) {
+      // Unknown/unmapped country name — can't safely guess a dial code,
+      // so leave the digits as extracted rather than silently mislabeling
+      // them as Pakistani (the old bug). Flagged for manual review via
+      // the missing '+' prefix, same signal used to find the original 100.
+      return digits;
+    }
+    var local = digits;
+    if (local.startsWith(dialDigits)) {
+      local = local.substring(dialDigits.length);
+    }
+    local = local.replaceFirst(RegExp(r'^0+'), '');
+    return _spaceOutPhone('$dialDigits$local');
+  }
+
+  String _spaceOutPhone(String digitsWithCc) => '+$digitsWithCc';
+
+  // CountryCode.all entries are "Country Name" -> "+123" — build a
+  // lowercase-name -> digits-only-dial-code lookup once per call (this
+  // form is only submitted a handful of times per session, so there's no
+  // need to cache it as a field). A few common aliases are checked first
+  // since the AI extraction prompt's country names don't always match
+  // CountryCode.all's naming exactly (e.g. it outputs "United States" /
+  // "United Arab Emirates", while the picker list uses "USA" and doesn't
+  // list UAE at all — a separate gap worth fixing in the picker list
+  // itself, but this keeps phone normalization correct regardless).
+  static const _kCountryAliasDialCodes = <String, String>{
+    'united states': '1',
+    'united states of america': '1',
+    'usa': '1',
+    'us': '1',
+    'united arab emirates': '971',
+    'uae': '971',
+    'u.a.e': '971',
+    'u.a.e.': '971',
+  };
+
+  String? _dialCodeForCountry(String countryName) {
+    final needle = countryName.trim().toLowerCase();
+    if (needle.isEmpty) return null;
+    if (_kCountryAliasDialCodes.containsKey(needle)) {
+      return _kCountryAliasDialCodes[needle];
+    }
+    for (final c in CountryCode.all) {
+      if (c.name.toLowerCase() == needle) {
+        return c.dialCode.replaceAll(RegExp(r'[^\d]'), '');
+      }
+    }
+    return null;
+  }
+
   Future<void> _save() async {
     if (_nameCtrl.text.trim().isEmpty)  { _err('Name is required');   return; }
     if (_ageCtrl.text.trim().isEmpty)   { _err('Age is required');    return; }
@@ -357,8 +463,8 @@ class _State extends State<AdminWhatsAppImportScreen> {
         'name'           : _nameCtrl.text.trim().isNotEmpty ? _nameCtrl.text.trim() : 'Unknown',
         'age'            : int.tryParse(_ageCtrl.text.trim()) ?? 0,
         'gender'         : _gender ?? 'Female',
-        'contact_phone'  : _phoneCtrl.text.trim().isNotEmpty ? _phoneCtrl.text.trim() : '0000000000',
-        if (_phone2Ctrl.text.trim().isNotEmpty) 'contact_phone_2' : _phone2Ctrl.text.trim(),
+        'contact_phone'  : _phoneCtrl.text.trim().isNotEmpty ? _normalizePhone(_phoneCtrl.text.trim(), _countryCtrl.text.trim()) : '0000000000',
+        if (_phone2Ctrl.text.trim().isNotEmpty) 'contact_phone_2' : _normalizePhone(_phone2Ctrl.text.trim(), _countryCtrl.text.trim()),
         'height_inches'  : heightInches,
         'city'           : _city           ?? 'Other',
         'caste'          : _caste          ?? 'Other',
@@ -535,7 +641,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
         Expanded(child: _modeBtn('Upload', Icons.upload_file_rounded, 'upload',
           () async { setState(() => _inputMode = 'upload'); await _uploadFile(); })),
         const SizedBox(width: 8),
-        Expanded(child: _modeBtn('Scan', Icons.document_scanner_rounded, 'scan',
+        if (!kIsWeb) Expanded(child: _modeBtn('Scan', Icons.document_scanner_rounded, 'scan',
           () => setState(() { _inputMode = 'scan'; _scanMode = true; }))),
       ]),
       const SizedBox(height: 8),
@@ -731,7 +837,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
   ]);
 
   // ── Photo box widget ──────────────────────────────────────
-  Widget _photoBox(String label, File? file, VoidCallback onTap, IconData icon) => GestureDetector(
+  Widget _photoBox(String label, Uint8List? file, VoidCallback onTap, IconData icon) => GestureDetector(
     onTap: onTap,
     child: Container(
       decoration: BoxDecoration(
@@ -758,7 +864,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
           : ClipRRect(
               borderRadius: BorderRadius.circular(11),
               child: Stack(fit: StackFit.expand, children: [
-                Image.file(file, fit: BoxFit.cover),
+                Image.memory(file!, fit: BoxFit.cover),
                 Positioned(top: 4, right: 4,
                   child: Container(
                     width: 20, height: 20,
