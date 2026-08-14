@@ -19,6 +19,9 @@ import 'admin_whatsapp_import_screen.dart';
 import 'admin_login_screen.dart';
 import 'admin_edit_requests_screen.dart';
 import 'admin_testimonials_screen.dart';
+import 'admin_ads_screen.dart';
+import 'admin_accounts_screen.dart';
+import 'admin_usage_stats_screen.dart';
 
 // ── Thin screen wrappers for the new standalone Ads and Verification tabs ──
 // AdminAdsCard and VerificationSettingsCard are self-contained widgets
@@ -57,8 +60,7 @@ class AdminVerificationScreen extends StatelessWidget {
     );
   }
 }
-import 'admin_accounts_screen.dart';
-import 'admin_usage_stats_screen.dart';
+
 
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
@@ -545,7 +547,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       (Icons.handshake_outlined, 'Affiliate'),
       (Icons.format_quote_rounded, 'Content'),
       (Icons.campaign_rounded, 'Ads'),
-      (Icons.verified_user_outlined, 'Verification'),
+      (Icons.security, 'Verification'),
     ];
     return Container(
       width: 210,
@@ -875,7 +877,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       (Icons.handshake_outlined, 'Affiliate'),
       (Icons.format_quote_rounded, 'Content'),
       (Icons.campaign_rounded, 'Ads'),
-      (Icons.verified_user_outlined, 'Verify'),
+      (Icons.security, 'Verify'),
     ];
     final s = _S.of(context);
     // Each tab item is fixed width so the bar scrolls horizontally when

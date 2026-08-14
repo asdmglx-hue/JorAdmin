@@ -730,7 +730,7 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
               Container(
                 width: 34, height: 34,
                 decoration: BoxDecoration(color: kPurple.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Icons.verified_user_outlined, color: kPurple, size: 18),
+                child: const Icon(Icons.security, color: kPurple, size: 18),
               ),
               const SizedBox(width: 12),
               const Expanded(child: Text('Verification Settings', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white))),
