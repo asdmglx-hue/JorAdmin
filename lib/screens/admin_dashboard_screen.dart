@@ -547,7 +547,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       (Icons.handshake_outlined, 'Affiliate'),
       (Icons.format_quote_rounded, 'Content'),
       (Icons.campaign_rounded, 'Ads'),
-      (Icons.security, 'Verification'),
+      (Icons.admin_panel_settings_rounded, 'Verification'),
     ];
     return Container(
       width: 210,
@@ -877,7 +877,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       (Icons.handshake_outlined, 'Affiliate'),
       (Icons.format_quote_rounded, 'Content'),
       (Icons.campaign_rounded, 'Ads'),
-      (Icons.security, 'Verify'),
+      (Icons.admin_panel_settings_rounded, 'Verify'),
     ];
     final s = _S.of(context);
     // Each tab item is fixed width so the bar scrolls horizontally when
