@@ -42,7 +42,6 @@ class AdminTestimonialsScreen extends StatefulWidget {
 class _AdminTestimonialsScreenState extends State<AdminTestimonialsScreen> {
   VoidCallback? _refreshStories;
   VoidCallback? _refreshBlog;
-  VoidCallback? _refreshAds;
   VoidCallback? _refreshData;
 
   @override
@@ -53,7 +52,6 @@ class _AdminTestimonialsScreenState extends State<AdminTestimonialsScreen> {
     widget.onRefreshCallback?.call(() {
       _refreshStories?.call();
       _refreshBlog?.call();
-      _refreshAds?.call();
     });
   }
 
@@ -67,10 +65,6 @@ class _AdminTestimonialsScreenState extends State<AdminTestimonialsScreen> {
           _StoriesCard(onRefreshCallback: (cb) => _refreshStories = cb),
           const SizedBox(height: 16),
           AdminBlogCard(onRefreshCallback: (cb) => _refreshBlog = cb),
-          const SizedBox(height: 16),
-          AdminAdsCard(onRefreshCallback: (cb) => _refreshAds = cb),
-          const SizedBox(height: 16),
-          const VerificationSettingsCard(),
           const SizedBox(height: 16),
           const DataManagementCard(),
         ]),

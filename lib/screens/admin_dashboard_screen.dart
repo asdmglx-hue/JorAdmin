@@ -19,6 +19,44 @@ import 'admin_whatsapp_import_screen.dart';
 import 'admin_login_screen.dart';
 import 'admin_edit_requests_screen.dart';
 import 'admin_testimonials_screen.dart';
+
+// ── Thin screen wrappers for the new standalone Ads and Verification tabs ──
+// AdminAdsCard and VerificationSettingsCard are self-contained widgets
+// defined in their own files — these wrappers just give each a full-screen
+// Scaffold so they work as top-level tab destinations.
+class AdminAdsScreen extends StatelessWidget {
+  final void Function(VoidCallback)? onRefreshCallback;
+  const AdminAdsScreen({super.key, this.onRefreshCallback});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F0D1E),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(children: [
+          AdminAdsCard(onRefreshCallback: onRefreshCallback),
+        ]),
+      ),
+    );
+  }
+}
+
+class AdminVerificationScreen extends StatelessWidget {
+  final void Function(VoidCallback)? onRefreshCallback;
+  const AdminVerificationScreen({super.key, this.onRefreshCallback});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F0D1E),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: const Column(children: [
+          VerificationSettingsCard(),
+        ]),
+      ),
+    );
+  }
+}
 import 'admin_accounts_screen.dart';
 import 'admin_usage_stats_screen.dart';
 
@@ -49,6 +87,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   int _tab = 0;
   VoidCallback? _addAffiliate;
   VoidCallback? _refreshAffiliate;
+  VoidCallback? _refreshAds;
+  VoidCallback? _refreshVerification;
   VoidCallback? _refreshTestimonials;
   bool _refreshing = false;
   int _affiliateTrashCount = 0;
@@ -459,6 +499,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         const AdminPricingScreen(),
         AdminAffiliateScreen(onRegisterCallback: (cb) => _addAffiliate = cb, onRefreshCallback: (cb) => _refreshAffiliate = cb, onAffiliateDeleted: _loadAffiliateTrashCount),
         AdminTestimonialsScreen(onRefreshCallback: (cb) => _refreshTestimonials = cb),
+        AdminAdsScreen(onRefreshCallback: (cb) => _refreshAds = cb),
+        AdminVerificationScreen(onRefreshCallback: (cb) => _refreshVerification = cb),
       ],
     );
 
@@ -502,6 +544,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       (Icons.attach_money_rounded, 'Pricing'),
       (Icons.handshake_outlined, 'Affiliate'),
       (Icons.format_quote_rounded, 'Content'),
+      (Icons.campaign_rounded, 'Ads'),
+      (Icons.verified_user_outlined, 'Verification'),
     ];
     return Container(
       width: 210,
@@ -545,6 +589,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                     onTap: () {
                       setState(() => _tab = i);
                       if (i == 4) _loadAffiliateTrashCount();
+                      if (i == 6) _refreshAds?.call();
+                      if (i == 7) _refreshVerification?.call();
                     },
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 150),
@@ -714,6 +760,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ),
             SizedBox(width: s.s(8)),
           ],
+          if (_tab == 6) ...[
+            GestureDetector(
+              onTap: () => _refreshAds?.call(),
+              child: Container(
+                width: s.d(36), height: s.d(36),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
+            ),
+            SizedBox(width: s.s(8)),
+          ],
+          if (_tab == 7) ...[
+            GestureDetector(
+              onTap: () => _refreshVerification?.call(),
+              child: Container(
+                width: s.d(36), height: s.d(36),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
+            ),
+            SizedBox(width: s.s(8)),
+          ],
           if (_tab == 0) ...[
             GestureDetector(
               onTap: () => _showSettingsDialog(context, svc),
@@ -808,70 +874,82 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       (Icons.attach_money_rounded, 'Pricing'),
       (Icons.handshake_outlined, 'Affiliate'),
       (Icons.format_quote_rounded, 'Content'),
+      (Icons.campaign_rounded, 'Ads'),
+      (Icons.verified_user_outlined, 'Verify'),
     ];
     final s = _S.of(context);
+    // Each tab item is fixed width so the bar scrolls horizontally when
+    // there are more tabs than fit on screen — same pattern used by
+    // YouTube, Instagram, and other apps with many nav items.
+    const double itemWidth = 72;
     return Container(
       height: s.d(64),
       decoration: BoxDecoration(
         color: const Color(0xFF16132A),
         border: Border(top: BorderSide(color: Colors.white.withOpacity(0.07))),
       ),
-      child: Row(
-        children: items.asMap().entries.map((e) {
-          final i = e.key;
-          final item = e.value;
-          final selected = _tab == i;
-          return Expanded(
-            child: GestureDetector(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: items.asMap().entries.map((e) {
+            final i = e.key;
+            final item = e.value;
+            final selected = _tab == i;
+            return GestureDetector(
               onTap: () {
                 HapticFeedback.lightImpact();
                 setState(() => _tab = i);
-              if (i == 4) _loadAffiliateTrashCount();
+                if (i == 4) _loadAffiliateTrashCount();
+                if (i == 6) _refreshAds?.call();
+                if (i == 7) _refreshVerification?.call();
               },
               behavior: HitTestBehavior.opaque,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Icon(
-                        item.$1,
-                        size: s.d(22),
-                        color: selected ? kPurple : Colors.white.withOpacity(0.3),
-                      ),
-                      // Badge on Orders tab (index 1)
-                      if (i == 1 && _pendingCount > 0)
-                        Positioned(
-                          right: -6,
-                          top: -6,
-                          child: Container(
-                            padding: const EdgeInsets.all(3),
-                            decoration: const BoxDecoration(color: kRose, shape: BoxShape.circle),
-                            constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                            child: Text(
-                              _pendingCount > 99 ? '99+' : '${_pendingCount}',
-                              style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800),
-                              textAlign: TextAlign.center,
+              child: SizedBox(
+                width: itemWidth,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Icon(
+                          item.$1,
+                          size: s.d(22),
+                          color: selected ? kPurple : Colors.white.withOpacity(0.3),
+                        ),
+                        // Badge on Orders tab (index 1)
+                        if (i == 1 && _pendingCount > 0)
+                          Positioned(
+                            right: -6,
+                            top: -6,
+                            child: Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: const BoxDecoration(color: kRose, shape: BoxShape.circle),
+                              constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                              child: Text(
+                                _pendingCount > 99 ? '99+' : '${_pendingCount}',
+                                style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800),
+                                textAlign: TextAlign.center,
+                              ),
                             ),
                           ),
-                        ),
-                    ],
-                  ),
-                  SizedBox(height: s.s(3)),
-                  Text(
-                    item.$2,
-                    style: TextStyle(
-                      fontSize: s.f(10),
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                      color: selected ? kPurple : Colors.white.withOpacity(0.3),
+                      ],
                     ),
-                  ),
-                ],
+                    SizedBox(height: s.s(3)),
+                    Text(
+                      item.$2,
+                      style: TextStyle(
+                        fontSize: s.f(10),
+                        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                        color: selected ? kPurple : Colors.white.withOpacity(0.3),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          );
-        }).toList(),
+            );
+          }).toList(),
+        ),
       ),
     );
   }
