@@ -70,6 +70,8 @@ class _AdminTestimonialsScreenState extends State<AdminTestimonialsScreen> {
           const SizedBox(height: 16),
           AdminAdsCard(onRefreshCallback: (cb) => _refreshAds = cb),
           const SizedBox(height: 16),
+          const VerificationSettingsCard(),
+          const SizedBox(height: 16),
           const DataManagementCard(),
         ]),
       ),
@@ -646,6 +648,148 @@ class _Field extends StatelessWidget {
 //  (user app, admin app, website) fetch from the same DB tables so changes
 //  reflect everywhere automatically on next refresh.
 // ══════════════════════════════════════════════════════════════════════════════
+
+// ── Verification Settings Card ────────────────────────────────────────────────
+// Controls which verification sections are shown in the proposal form
+// (user app + website). Each toggle writes to app_settings in Supabase
+// so changes sync instantly across all platforms.
+class VerificationSettingsCard extends StatefulWidget {
+  const VerificationSettingsCard({super.key});
+  @override State<VerificationSettingsCard> createState() => _VerificationSettingsCardState();
+}
+
+class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
+  bool _cardExpanded = true;
+  bool _loading = true;
+  bool _candidateCnic = true;
+  bool _latestDegree = true;
+  bool _parentsCnic = true;
+
+  static const _keyCandidateCnic = 'require_candidate_cnic';
+  static const _keyLatestDegree  = 'require_latest_degree';
+  static const _keyParentsCnic   = 'require_parents_cnic';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final rows = await _db.from('app_settings').select('key, value') as List;
+      final map = { for (final r in rows) r['key'] as String: r['value'] as String };
+      if (mounted) setState(() {
+        _candidateCnic = (map[_keyCandidateCnic] ?? 'true') != 'false';
+        _latestDegree  = (map[_keyLatestDegree]  ?? 'true') != 'false';
+        _parentsCnic   = (map[_keyParentsCnic]   ?? 'true') != 'false';
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _toggle(String key, bool value) async {
+    try {
+      await _db.rpc('admin_upsert_setting', params: {'p_key': key, 'p_value': value.toString()});
+      await SupabaseService.instance.fetchAppSettings();
+    } catch (_) {}
+  }
+
+  Widget _row(String label, String subtitle, bool value, ValueChanged<bool> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(children: [
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Colors.white)),
+          const SizedBox(height: 3),
+          Text(subtitle, style: TextStyle(fontSize: 11.5, color: Colors.white.withOpacity(0.45))),
+        ])),
+        Switch(
+          value: value,
+          onChanged: onChanged,
+          activeColor: kTeal,
+          inactiveThumbColor: Colors.white24,
+          inactiveTrackColor: Colors.white10,
+        ),
+      ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1A2E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: Column(children: [
+        // Header
+        GestureDetector(
+          onTap: () => setState(() => _cardExpanded = !_cardExpanded),
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(children: [
+              Container(
+                width: 34, height: 34,
+                decoration: BoxDecoration(color: kPurple.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+                child: const Icon(Icons.verified_user_outlined, color: kPurple, size: 18),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(child: Text('Verification Settings', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white))),
+              Icon(_cardExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                color: Colors.white38, size: 20),
+            ]),
+          ),
+        ),
+
+        if (_cardExpanded) ...[
+          Divider(height: 1, color: Colors.white.withOpacity(0.07)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: _loading
+              ? const Center(child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20),
+                  child: CircularProgressIndicator(strokeWidth: 2, color: kPurple)))
+              : Column(children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8, top: 4),
+                    child: Text(
+                      'Toggle which verification sections appear in the proposal form across the user app and website.',
+                      style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.45), height: 1.5),
+                    ),
+                  ),
+                  Divider(height: 1, color: Colors.white.withOpacity(0.07)),
+                  _row(
+                    'Candidate CNIC',
+                    'CNIC front & back of the marriage-seeking person',
+                    _candidateCnic,
+                    (v) { setState(() => _candidateCnic = v); _toggle(_keyCandidateCnic, v); },
+                  ),
+                  Divider(height: 1, color: Colors.white.withOpacity(0.05)),
+                  _row(
+                    'Latest Degree',
+                    'Most recent education document',
+                    _latestDegree,
+                    (v) { setState(() => _latestDegree = v); _toggle(_keyLatestDegree, v); },
+                  ),
+                  Divider(height: 1, color: Colors.white.withOpacity(0.05)),
+                  _row(
+                    'Parents / Guardian CNIC',
+                    'CNIC front & back of parents or guardian',
+                    _parentsCnic,
+                    (v) { setState(() => _parentsCnic = v); _toggle(_keyParentsCnic, v); },
+                  ),
+                ]),
+          ),
+        ],
+      ]),
+    );
+  }
+}
 
 class DataManagementCard extends StatefulWidget {
   const DataManagementCard({super.key});
