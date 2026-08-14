@@ -1627,6 +1627,69 @@ class SupabaseService extends ChangeNotifier {
 
   String _r2Sha256(List<int> data) =>
       sha256.convert(data).bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  // Lists all R2 objects under a given prefix — used by the Tracking tab
+  // to find every file a user ever uploaded, even after DB deletion.
+  Future<List<Map<String, String>>> listR2Objects(String prefix) async {
+    final now = DateTime.now().toUtc();
+    final dateStamp = now.year.toString() +
+        now.month.toString().padLeft(2, '0') +
+        now.day.toString().padLeft(2, '0');
+    final amzDate = dateStamp + 'T' +
+        now.hour.toString().padLeft(2, '0') +
+        now.minute.toString().padLeft(2, '0') +
+        now.second.toString().padLeft(2, '0') + 'Z';
+
+    final encodedPrefix = Uri.encodeQueryComponent(prefix);
+    final queryString = 'list-type=2&prefix=$encodedPrefix';
+    final uri = Uri.parse('$_r2Endpoint/$_r2Bucket?$queryString');
+
+    const region = 'auto';
+    const service = 's3';
+    final scope = '$dateStamp/$region/$service/aws4_request';
+    const signedHeaders = 'x-amz-content-sha256;x-amz-date';
+    const payload = 'UNSIGNED-PAYLOAD';
+    final canonical = 'GET\n/$_r2Bucket\n$queryString\nx-amz-content-sha256:$payload\nx-amz-date:$amzDate\n\n$signedHeaders\n$payload';
+    final canonicalHash = _r2Sha256(utf8.encode(canonical));
+    final stringToSign = 'AWS4-HMAC-SHA256\n$amzDate\n$scope\n$canonicalHash';
+    final signingKey = _r2DeriveKey(dateStamp, region, service);
+    final signature = _r2HmacHex(signingKey, stringToSign);
+    final auth = 'AWS4-HMAC-SHA256 Credential=$_r2AccessKeyId/$scope, SignedHeaders=$signedHeaders, Signature=$signature';
+
+    try {
+      final response = await http.get(uri, headers: {
+        'x-amz-date': amzDate,
+        'x-amz-content-sha256': payload,
+        'Authorization': auth,
+      });
+      if (response.statusCode != 200) return [];
+      final body = response.body;
+      final results = <Map<String, String>>[];
+      final contentsRx = RegExp(r'<Contents>(.*?)</Contents>', dotAll: true);
+      final keyRx      = RegExp(r'<Key>(.*?)</Key>');
+      final dateRx     = RegExp(r'<LastModified>(.*?)</LastModified>');
+      final sizeRx     = RegExp(r'<Size>(\d+)</Size>');
+      for (final m in contentsRx.allMatches(body)) {
+        final b = m.group(1)!;
+        final key  = keyRx.firstMatch(b)?.group(1) ?? '';
+        final date = dateRx.firstMatch(b)?.group(1) ?? '';
+        final size = sizeRx.firstMatch(b)?.group(1) ?? '0';
+        if (key.isNotEmpty) results.add({'key': key, 'url': '$_r2PublicUrl/$key', 'date': date, 'size': size});
+      }
+      return results;
+    } catch (e) {
+      debugPrint('[R2] listR2Objects error: $e');
+      return [];
+    }
+  }
+
+  // Permanently deletes a single object from R2 by its exact key (e.g. the
+  // 'key' field returned by listR2Objects). Used by the Tracking tab's
+  // delete button — irreversible, the caller is responsible for confirming
+  // with the admin first.
+  Future<void> deleteR2Object(String key) async {
+    await _deleteFromR2(key);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

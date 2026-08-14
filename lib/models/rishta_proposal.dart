@@ -324,13 +324,70 @@ class RishtaProposal {
     return '+$cc ${'*' * rest.length}';
   }
 
+  // Phone grouping patterns for major diaspora countries.
+  // Longer codes listed first so '+353' matches before '+3'.
+  static const _phoneFormats = <(String, List<int>)>[
+    ('+353', [2, 3, 4]), // Ireland
+    ('+966', [2, 3, 4]), // Saudi Arabia
+    ('+971', [2, 3, 4]), // UAE
+    ('+968', [4, 4]),    // Oman
+    ('+974', [4, 4]),    // Qatar
+    ('+973', [4, 4]),    // Bahrain
+    ('+965', [4, 4]),    // Kuwait
+    ('+92',  [3, 7]),    // Pakistan
+    ('+64',  [2, 3, 4]), // New Zealand
+    ('+61',  [3, 3, 3]), // Australia
+    ('+49',  [3, 7]),    // Germany
+    ('+47',  [3, 2, 3]), // Norway
+    ('+46',  [3, 3, 3]), // Sweden
+    ('+45',  [2, 2, 2, 2]), // Denmark
+    ('+44',  [4, 6]),    // UK
+    ('+39',  [3, 7]),    // Italy
+    ('+34',  [3, 6]),    // Spain
+    ('+33',  [1, 2, 2, 2, 2]), // France
+    ('+31',  [1, 4, 4]), // Netherlands
+    ('+30',  [3, 7]),    // Greece
+    ('+90',  [3, 3, 4]), // Turkey
+    ('+60',  [2, 4, 4]), // Malaysia
+    ('+1',   [3, 3, 4]), // USA / Canada
+  ];
+
+  static String _groupDigits(String digits, List<int> groups) {
+    final parts = <String>[];
+    var pos = 0;
+    for (final g in groups) {
+      if (pos >= digits.length) break;
+      parts.add(digits.substring(pos, (pos + g).clamp(0, digits.length)));
+      pos += g;
+    }
+    if (pos < digits.length) parts.add(digits.substring(pos));
+    return parts.join(' ');
+  }
+
   static String _formatPK(String raw) {
-    String digits = raw.replaceAll(RegExp(r'[^\d]'), '');
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return raw;
+
+    // Numbers with explicit '+' country code
+    if (trimmed.startsWith('+')) {
+      for (final fmt in _phoneFormats) {
+        final code = fmt.$1;
+        final groups = fmt.$2;
+        if (trimmed.startsWith(code)) {
+          final local = trimmed.substring(code.length)
+              .replaceAll(RegExp(r'[^\d]'), '')
+              .replaceFirst(RegExp(r'^0+'), '');
+          return '$code ${_groupDigits(local, groups)}';
+        }
+      }
+      return trimmed; // unknown country — show as-is
+    }
+
+    // Legacy Pakistani stored without '+' (0300... or 92300...)
+    String digits = trimmed.replaceAll(RegExp(r'[^\d]'), '');
     if (digits.startsWith('92')) digits = digits.substring(2);
     if (digits.startsWith('0')) digits = digits.substring(1);
-    if (digits.length >= 10) {
-      return '+92 ${digits.substring(0, 3)} ${digits.substring(3)}';
-    }
+    if (digits.length >= 10) return '+92 ${_groupDigits(digits, [3, 7])}';
     return '+92 $digits';
   }
 

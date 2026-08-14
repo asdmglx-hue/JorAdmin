@@ -813,7 +813,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
             ),
             SizedBox(width: s.s(6)),
             // Phone number right next to icons
-            Flexible(child: Text(phone,
+            Flexible(child: Text(AdminUser.formatPhone(phone),
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: s.f(13)),
                 textAlign: TextAlign.right, overflow: TextOverflow.ellipsis)),
           ]),

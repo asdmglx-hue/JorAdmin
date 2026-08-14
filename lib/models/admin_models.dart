@@ -227,6 +227,45 @@ class AdminUser {
   final String? about;
   final String contactPhone;
   final String? contactPhone2;
+
+  static String formatPhone(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return raw;
+    if (trimmed.startsWith('+')) {
+      const formats = <(String, List<int>)>[
+        ('+353', [2, 3, 4]), ('+966', [2, 3, 4]), ('+971', [2, 3, 4]),
+        ('+968', [4, 4]), ('+974', [4, 4]), ('+973', [4, 4]), ('+965', [4, 4]),
+        ('+92',  [3, 7]), ('+64',  [2, 3, 4]), ('+61',  [3, 3, 3]),
+        ('+49',  [3, 7]), ('+47',  [3, 2, 3]), ('+46',  [3, 3, 3]),
+        ('+45',  [2, 2, 2, 2]), ('+44', [4, 6]), ('+39', [3, 7]),
+        ('+34',  [3, 6]), ('+33',  [1, 2, 2, 2, 2]), ('+31', [1, 4, 4]),
+        ('+30',  [3, 7]), ('+90',  [3, 3, 4]), ('+60',  [2, 4, 4]),
+        ('+1',   [3, 3, 4]),
+      ];
+      for (final fmt in formats) {
+        if (trimmed.startsWith(fmt.$1)) {
+          final local = trimmed.substring(fmt.$1.length)
+              .replaceAll(RegExp(r'[^\d]'), '')
+              .replaceFirst(RegExp(r'^0+'), '');
+          final parts = <String>[];
+          var pos = 0;
+          for (final g in fmt.$2) {
+            if (pos >= local.length) break;
+            parts.add(local.substring(pos, (pos + g).clamp(0, local.length)));
+            pos += g;
+          }
+          if (pos < local.length) parts.add(local.substring(pos));
+          return '${fmt.$1} ${parts.join(' ')}';
+        }
+      }
+      return trimmed;
+    }
+    String digits = trimmed.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.startsWith('92')) digits = digits.substring(2);
+    if (digits.startsWith('0')) digits = digits.substring(1);
+    if (digits.length >= 10) return '+92 ${digits.substring(0, 3)} ${digits.substring(3)}';
+    return '+92 $digits';
+  }
   final bool phoneVerified;
   final bool emailVerified;
   final bool cnicVerified;

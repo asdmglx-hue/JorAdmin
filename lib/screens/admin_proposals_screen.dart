@@ -21,6 +21,18 @@ List<String> _missingVerificationDocs(AdminUser user) {
   return missing;
 }
 
+// Drives the red dot on the View icon (here and on the dashboard's "Verify"
+// count) — true the moment ANY verification document has been uploaded for
+// this profile, regardless of review status. Public so the dashboard stats
+// card can count it too, without a second, possibly-drifting definition.
+bool hasVerificationImages(AdminUser user) {
+  return (user.cnicFront != null && user.cnicFront!.isNotEmpty) ||
+      (user.cnicBack != null && user.cnicBack!.isNotEmpty) ||
+      (user.educationDocument != null && user.educationDocument!.isNotEmpty) ||
+      (user.guardianCnicFront != null && user.guardianCnicFront!.isNotEmpty) ||
+      (user.guardianCnicBack != null && user.guardianCnicBack!.isNotEmpty);
+}
+
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
   final double scale;
@@ -331,7 +343,7 @@ class _ApprovedCard extends StatelessWidget {
                       child: Icon(Icons.remove_red_eye_outlined,
                           size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
                     ),
-                    if (svc.pendingVerificationProposalIds.contains(user.id))
+                    if (hasVerificationImages(user))
                       Positioned(
                         top: -2, right: -2,
                         child: Container(
@@ -349,7 +361,7 @@ class _ApprovedCard extends StatelessWidget {
             ],
           ),
           SizedBox(height: _S.of(context).s(12)),
-          _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
+          _DetailRow(icon: Icons.phone_rounded, label: AdminUser.formatPhone(user.contactPhone)),
           _DetailRow(
             icon: Icons.calendar_today_rounded,
             label: 'Approved ${_timeAgo(user.subscriptionStart ?? user.postedAt)}'
@@ -515,7 +527,7 @@ class _PendingCard extends StatelessWidget {
                       child: Icon(Icons.remove_red_eye_outlined,
                           size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
                     ),
-                    if (svc.pendingVerificationProposalIds.contains(user.id))
+                    if (hasVerificationImages(user))
                       Positioned(
                         top: -2, right: -2,
                         child: Container(
@@ -533,7 +545,7 @@ class _PendingCard extends StatelessWidget {
             ],
           ),
           SizedBox(height: _S.of(context).s(12)),
-          _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
+          _DetailRow(icon: Icons.phone_rounded, label: AdminUser.formatPhone(user.contactPhone)),
           _DetailRow(
             icon: Icons.calendar_today_rounded,
             label: 'Submitted ${_timeAgo(user.postedAt)}'

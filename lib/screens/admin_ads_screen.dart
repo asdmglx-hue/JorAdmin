@@ -26,7 +26,6 @@ class _AdminAdsCardState extends State<AdminAdsCard> {
   bool _loading = true;
   String? _error;
   final Set<String> _expandedIds = {};
-  bool _cardExpanded = false;
   AutoRefreshSync? _sync;
 
   @override
@@ -122,7 +121,6 @@ class _AdminAdsCardState extends State<AdminAdsCard> {
         children: [
           GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () => setState(() => _cardExpanded = !_cardExpanded),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(18, 18, 14, 18),
               child: Row(children: [
@@ -141,16 +139,9 @@ class _AdminAdsCardState extends State<AdminAdsCard> {
                     child: Icon(Icons.add_rounded, color: kPurple, size: 18),
                   ),
                 ),
-                const SizedBox(width: 10),
-                AnimatedRotation(
-                  turns: _cardExpanded ? 0.5 : 0,
-                  duration: const Duration(milliseconds: 200),
-                  child: Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white.withOpacity(0.4), size: 22),
-                ),
               ]),
             ),
           ),
-          if (_cardExpanded) ...[
           Container(height: 1, color: Colors.white.withOpacity(0.08)),
           _loading
             ? const Padding(padding: EdgeInsets.all(32), child: Center(child: CircularProgressIndicator(color: kPurple)))
@@ -308,7 +299,6 @@ class _AdminAdsCardState extends State<AdminAdsCard> {
                       );
                     },
                   ),
-          ],
         ],
       ),
     );
