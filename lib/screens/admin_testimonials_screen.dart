@@ -654,13 +654,15 @@ class VerificationSettingsCard extends StatefulWidget {
 
 class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
   bool _loading = true;
-  bool _candidateCnic = true;
-  bool _latestDegree = true;
-  bool _parentsCnic = true;
+  bool _candidateCnic    = true;
+  bool _latestDegree     = true;
+  bool _parentsCnic      = true;
+  bool _requireVerifStep = false;
 
   static const _keyCandidateCnic = 'require_candidate_cnic';
   static const _keyLatestDegree  = 'require_latest_degree';
-  static const _keyParentsCnic   = 'require_parents_cnic';
+  static const _keyParentsCnic      = 'require_parents_cnic';
+  static const _keyRequireVerifStep = 'require_verification_step';
 
   @override
   void initState() {
@@ -675,7 +677,8 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
       if (mounted) setState(() {
         _candidateCnic = (map[_keyCandidateCnic] ?? 'true') != 'false';
         _latestDegree  = (map[_keyLatestDegree]  ?? 'true') != 'false';
-        _parentsCnic   = (map[_keyParentsCnic]   ?? 'true') != 'false';
+        _parentsCnic      = (map[_keyParentsCnic]      ?? 'true')  != 'false';
+        _requireVerifStep = (map[_keyRequireVerifStep] ?? 'false') == 'true';
         _loading = false;
       });
     } catch (_) {
@@ -767,6 +770,13 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
                   'CNIC front & back of parents or guardian',
                   _parentsCnic,
                   (v) { setState(() => _parentsCnic = v); _toggle(_keyParentsCnic, v); },
+                ),
+                Divider(height: 1, color: Colors.white.withOpacity(0.05)),
+                _row(
+                  'Make Verification Compulsory',
+                  'Hides the Skip button — users must upload docs before submitting',
+                  _requireVerifStep,
+                  (v) { setState(() => _requireVerifStep = v); _toggle(_keyRequireVerifStep, v); },
                 ),
               ]),
         ),

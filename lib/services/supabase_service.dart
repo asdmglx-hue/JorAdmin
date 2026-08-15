@@ -1690,6 +1690,10 @@ class SupabaseService extends ChangeNotifier {
   Future<void> deleteR2Object(String key) async {
     await _deleteFromR2(key);
   }
+  // Lists all R2 objects under a given prefix — used by the Tracking tab
+  // to find every file a user ever uploaded, even after DB deletion.
+
+
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

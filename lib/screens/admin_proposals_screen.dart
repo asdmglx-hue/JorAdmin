@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
+import '../services/supabase_service.dart';
 import '../models/admin_models.dart';
 import 'admin_edit_user_screen.dart';
 import 'admin_trash_screen.dart';
@@ -11,26 +12,26 @@ import 'admin_trash_screen.dart';
 // (via the edit profile screen's Verification section) before a proposal
 // can be approved. Returns the human-readable labels of whatever's still
 // missing, so the block message can name exactly what's needed.
-List<String> _missingVerificationDocs(AdminUser user) {
+List<String> _missingVerificationDocs(AdminUser user, Map<String, String> settings) {
+  // Only check documents that the admin has toggled ON in Verification Settings.
+  // If a requirement is off, skip that document — don't block approval for it.
   final missing = <String>[];
-  if (user.cnicFront == null || user.cnicFront!.isEmpty) missing.add('CNIC Front');
-  if (user.cnicBack == null || user.cnicBack!.isEmpty) missing.add('CNIC Back');
-  if (user.educationDocument == null || user.educationDocument!.isEmpty) missing.add('Education Document');
-  if (user.guardianCnicFront == null || user.guardianCnicFront!.isEmpty) missing.add('Guardian CNIC Front');
-  if (user.guardianCnicBack == null || user.guardianCnicBack!.isEmpty) missing.add('Guardian CNIC Back');
-  return missing;
-}
+  final requireCnic    = settings['require_candidate_cnic'] != 'false';
+  final requireDegree  = settings['require_latest_degree']  != 'false';
+  final requireParents = settings['require_parents_cnic']   != 'false';
 
-// Drives the red dot on the View icon (here and on the dashboard's "Verify"
-// count) — true the moment ANY verification document has been uploaded for
-// this profile, regardless of review status. Public so the dashboard stats
-// card can count it too, without a second, possibly-drifting definition.
-bool hasVerificationImages(AdminUser user) {
-  return (user.cnicFront != null && user.cnicFront!.isNotEmpty) ||
-      (user.cnicBack != null && user.cnicBack!.isNotEmpty) ||
-      (user.educationDocument != null && user.educationDocument!.isNotEmpty) ||
-      (user.guardianCnicFront != null && user.guardianCnicFront!.isNotEmpty) ||
-      (user.guardianCnicBack != null && user.guardianCnicBack!.isNotEmpty);
+  if (requireCnic) {
+    if (user.cnicFront == null || user.cnicFront!.isEmpty) missing.add('CNIC Front');
+    if (user.cnicBack  == null || user.cnicBack!.isEmpty)  missing.add('CNIC Back');
+  }
+  if (requireDegree) {
+    if (user.educationDocument == null || user.educationDocument!.isEmpty) missing.add('Education Document');
+  }
+  if (requireParents) {
+    if (user.guardianCnicFront == null || user.guardianCnicFront!.isEmpty) missing.add('Guardian CNIC Front');
+    if (user.guardianCnicBack  == null || user.guardianCnicBack!.isEmpty)  missing.add('Guardian CNIC Back');
+  }
+  return missing;
 }
 
 // ── Responsive scale helper ────────────────────────────────────────────────
@@ -343,7 +344,13 @@ class _ApprovedCard extends StatelessWidget {
                       child: Icon(Icons.remove_red_eye_outlined,
                           size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
                     ),
-                    if (hasVerificationImages(user))
+                    if (svc.pendingVerificationProposalIds.contains(user.id) ||
+                        user.hasPendingVerificationRequest ||
+                        (user.cnicFront != null && user.cnicFront!.isNotEmpty) ||
+                        (user.cnicBack != null && user.cnicBack!.isNotEmpty) ||
+                        (user.educationDocument != null && user.educationDocument!.isNotEmpty) ||
+                        (user.guardianCnicFront != null && user.guardianCnicFront!.isNotEmpty) ||
+                        (user.guardianCnicBack != null && user.guardianCnicBack!.isNotEmpty))
                       Positioned(
                         top: -2, right: -2,
                         child: Container(
@@ -361,7 +368,7 @@ class _ApprovedCard extends StatelessWidget {
             ],
           ),
           SizedBox(height: _S.of(context).s(12)),
-          _DetailRow(icon: Icons.phone_rounded, label: AdminUser.formatPhone(user.contactPhone)),
+          _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
           _DetailRow(
             icon: Icons.calendar_today_rounded,
             label: 'Approved ${_timeAgo(user.subscriptionStart ?? user.postedAt)}'
@@ -527,7 +534,13 @@ class _PendingCard extends StatelessWidget {
                       child: Icon(Icons.remove_red_eye_outlined,
                           size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
                     ),
-                    if (hasVerificationImages(user))
+                    if (svc.pendingVerificationProposalIds.contains(user.id) ||
+                        user.hasPendingVerificationRequest ||
+                        (user.cnicFront != null && user.cnicFront!.isNotEmpty) ||
+                        (user.cnicBack != null && user.cnicBack!.isNotEmpty) ||
+                        (user.educationDocument != null && user.educationDocument!.isNotEmpty) ||
+                        (user.guardianCnicFront != null && user.guardianCnicFront!.isNotEmpty) ||
+                        (user.guardianCnicBack != null && user.guardianCnicBack!.isNotEmpty))
                       Positioned(
                         top: -2, right: -2,
                         child: Container(
@@ -545,7 +558,7 @@ class _PendingCard extends StatelessWidget {
             ],
           ),
           SizedBox(height: _S.of(context).s(12)),
-          _DetailRow(icon: Icons.phone_rounded, label: AdminUser.formatPhone(user.contactPhone)),
+          _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
           _DetailRow(
             icon: Icons.calendar_today_rounded,
             label: 'Submitted ${_timeAgo(user.postedAt)}'
@@ -571,9 +584,11 @@ class _PendingCard extends StatelessWidget {
             children: [
               Expanded(child: _ActBtn(
                 label: 'Approve', icon: Icons.check_rounded, color: kGreen,
-                onTap: () {
+                onTap: () async {
                   HapticFeedback.mediumImpact();
-                  final missingDocs = _missingVerificationDocs(user);
+                  // Load verification requirements from app_settings
+                  final settings = await SupabaseService.instance.fetchAppSettings();
+                  final missingDocs = _missingVerificationDocs(user, settings);
                   if (missingDocs.isNotEmpty) {
                     showDialog(
                       context: context,

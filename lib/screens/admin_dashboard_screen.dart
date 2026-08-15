@@ -550,7 +550,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       (Icons.format_quote_rounded, 'Content'),
       (Icons.campaign_rounded, 'Ads'),
       (Icons.admin_panel_settings_rounded, 'Verification'),
-      (Icons.search_rounded, 'Tracking'),
+      (Icons.manage_search_rounded, 'Tracking'),
     ];
     return Container(
       width: 210,
@@ -887,7 +887,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       (Icons.format_quote_rounded, 'Content'),
       (Icons.campaign_rounded, 'Ads'),
       (Icons.admin_panel_settings_rounded, 'Verify'),
-      (Icons.search_rounded, 'Track'),
+      (Icons.manage_search_rounded, 'Track'),
     ];
     final s = _S.of(context);
     // Each tab item is fixed width so the bar scrolls horizontally when
@@ -1592,11 +1592,6 @@ class _StatusBreakdown extends StatelessWidget {
       u.country != null && u.country!.isNotEmpty && u.country!.toLowerCase() != 'pakistan'
     ).length;
 
-    // Same check that drives the red dot on the View icon in the Proposals
-    // screen — kept in sync by sharing hasVerificationImages() rather than
-    // querying cnic_verification_requests (an unused approval-queue table).
-    final verificationCount = users.where(hasVerificationImages).length;
-
     final row1 = [('Active', active), ('Inactive', inactive), ('Paused', paused), ('Featured', featured)];
     final row2 = [('Pending', pending), ('Rejected', rejected), ('Removed', removed), ('Affiliate', affiliate)];
     final row3 = [('Male', activeMale), ('Female', activeFemale), ('Cities', totalCities), ('Countries', totalCountries)];
@@ -1650,11 +1645,12 @@ class _StatusBreakdown extends StatelessWidget {
             SupabaseService.instance.client.from('profile_edit_requests').select('proposal_id').eq('status', 'applied')
                 .then((r) => (r as List).map((e) => e['proposal_id']).toSet().length),
             SupabaseService.instance.client.from('profile_reports').select('id').eq('status', 'pending').then((r) => (r as List).length),
+            SupabaseService.instance.client.from('cnic_verification_requests').select('id').eq('status', 'pending').then((r) => (r as List).length),
             SupabaseService.instance.client.from('admin_accounts').select('id').then((r) => (r as List).length),
           ]),
           builder: (_, snap) {
-            final d = snap.data ?? [0, 0, 0];
-            return Row(children: [cell('Review', d[0]), cell('Report', d[1]), cell('Verify', verificationCount), cell('Admins', d[2])]);
+            final d = snap.data ?? [0, 0, 0, 0];
+            return Row(children: [cell('Review', d[0]), cell('Report', d[1]), cell('Verify', d[2]), cell('Admins', d[3])]);
           },
         ),
       ]),

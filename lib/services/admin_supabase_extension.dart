@@ -122,12 +122,34 @@ extension AdminSupabaseExtension on SupabaseService {
         .maybeSingle();
     if (row == null) return null;
 
-    final subs = await client.from('subscriptions').select('*').eq('user_id', id);
+    final subs   = await client.from('subscriptions').select('*').eq('user_id', id);
     final boosts = await client.from('featured_boosts').select('*').eq('user_id', id);
     final photos = await client.from('proposal_photos').select('*').eq('proposal_id', id);
 
+    // Also fetch the latest pending verification request — docs submitted via
+    // "Verify Now" go into cnic_verification_requests, not into proposals
+    // directly. Merge them so the edit/view screen shows them immediately.
+    final verif = await client
+        .from('cnic_verification_requests')
+        .select('cnic_front_url, cnic_back_url, guardian_cnic_front_url, guardian_cnic_back_url, education_document_url')
+        .eq('proposal_id', id)
+        .eq('status', 'pending')
+        .order('submitted_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+
+    final merged = Map<String, dynamic>.from(row);
+    if (verif != null) {
+      // Only fill in fields that are null on the proposals row
+      merged['cnic_front_url']          ??= verif['cnic_front_url'];
+      merged['cnic_back_url']           ??= verif['cnic_back_url'];
+      merged['guardian_cnic_front_url'] ??= verif['guardian_cnic_front_url'];
+      merged['guardian_cnic_back_url']  ??= verif['guardian_cnic_back_url'];
+      merged['education_document_url']  ??= verif['education_document_url'];
+    }
+
     return AdminUser.fromJson({
-      ...row,
+      ...merged,
       'subscriptions': subs,
       'featured_boosts': boosts,
       'proposal_photos': photos,

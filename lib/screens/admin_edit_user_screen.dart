@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../models/admin_models.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/supabase_service.dart';
 import '../services/admin_supabase_extension.dart';
 import '../widgets/country_picker.dart';
@@ -79,7 +80,8 @@ class AdminEditUserScreen extends StatefulWidget {
 class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   late AdminUser _user;
   late AdminUser _baseline; // what we compare against for _hasChanges
-  bool _fullDataLoaded = false; // true once background full-row fetch completes
+  bool _fullDataLoaded = false;
+  RealtimeChannel? _proposalSub; // true once background full-row fetch completes
 
   // Country code for the phone fields (mirrors the Submit Proposal form's
   // country picker in the user app).
@@ -132,6 +134,31 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     _user = widget.user;
     _baseline = widget.user;
     _refreshCnicStatus();
+    // Subscribe to realtime changes on this specific proposal row so that
+    // docs submitted via Verify Now (website or app) appear immediately
+    // without the admin needing to close and reopen the edit screen.
+    final userId = widget.user.id;
+    _proposalSub = SupabaseService.instance.client
+        .channel('edit_screen_proposal_$userId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'proposals',
+          callback: (payload) {
+            final id = payload.newRecord['id'] as String?;
+            if (id == userId) _refreshCnicStatus();
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'cnic_verification_requests',
+          callback: (payload) {
+            final id = payload.newRecord['proposal_id'] as String?;
+            if (id == userId) _refreshCnicStatus();
+          },
+        )
+        .subscribe();
     _nameCtrl     = TextEditingController(text: _user.name);
     _ageCtrl      = TextEditingController(text: _user.age.toString());
     // Phone numbers may be stored as "{dialCode} {digits}" (numbers that
@@ -308,6 +335,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       _adminNotesCtrl, _locationCtrl, _disabilityDetailsCtrl, _countryCtrl,
       _professionCtrl, _professionCustomCtrl, _fatherOccCtrl, _motherOccCtrl,
     ]) { c.dispose(); }
+    _proposalSub?.unsubscribe();
     super.dispose();
   }
 
@@ -813,7 +841,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
             ),
             SizedBox(width: s.s(6)),
             // Phone number right next to icons
-            Flexible(child: Text(AdminUser.formatPhone(phone),
+            Flexible(child: Text(phone,
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: s.f(13)),
                 textAlign: TextAlign.right, overflow: TextOverflow.ellipsis)),
           ]),

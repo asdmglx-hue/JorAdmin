@@ -301,6 +301,7 @@ class AdminUser {
   final String? guardianCnicFront;
   final String? guardianCnicBack;
   final String? educationDocument;
+  final bool hasPendingVerificationRequest;
   final String? appliedCouponCode;
   final String? submissionSource; // 'website' | 'android' | null (legacy/admin-imported)
 
@@ -329,7 +330,7 @@ class AdminUser {
     this.totalSpending = 0, this.featuredPointsPurchased = 0, this.featuredPointsUsed = 0,
     this.featuredSchedule = const [], this.activationCode, this.pendingFeaturedTokens = 0,
     this.deletedFrom, this.deletionReason, this.adminNotes, this.registrationAllowed = false, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
-    this.guardianCnicFront, this.guardianCnicBack, this.educationDocument,
+    this.guardianCnicFront, this.guardianCnicBack, this.educationDocument, this.hasPendingVerificationRequest = false,
     this.appliedCouponCode, this.submissionSource,
   });
 
@@ -468,6 +469,7 @@ class AdminUser {
       guardianCnicFront: json['guardian_cnic_front_url'] as String?,
       guardianCnicBack: json['guardian_cnic_back_url'] as String?,
       educationDocument: json['education_document_url'] as String?,
+      hasPendingVerificationRequest: (json['has_pending_verification_request'] as bool?) ?? false,
       appliedCouponCode: json['applied_coupon_code'] as String?,
       submissionSource: json['submission_source'] as String?,
     );
@@ -608,6 +610,7 @@ class AdminUser {
     guardianCnicFront: guardianCnicFront is _Unset ? this.guardianCnicFront : guardianCnicFront as String?,
     guardianCnicBack: guardianCnicBack is _Unset ? this.guardianCnicBack : guardianCnicBack as String?,
     educationDocument: educationDocument is _Unset ? this.educationDocument : educationDocument as String?,
+    hasPendingVerificationRequest: this.hasPendingVerificationRequest,
     appliedCouponCode: appliedCouponCode ?? this.appliedCouponCode,
     submissionSource: submissionSource ?? this.submissionSource,
   );

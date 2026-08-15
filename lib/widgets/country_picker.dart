@@ -225,14 +225,33 @@ CountryCode? countryCodeForDial(String dialCode) {
 }
 
 /// Formats a raw phone entry + selected dial code into the single stored
-/// string format used across the app: "{dialCode} {digits}", with no
-/// leading zero for Pakistani numbers. Matches the Submit Proposal form's
-/// _formatDialedPhone() exactly, so both flows save phone numbers in the
-/// same format.
+/// Formats a dialed phone using country-aware grouping — same table as
+/// phoneDisplay() in supabase.ts and _formatPK() in rishta_proposal.dart.
+const _kPhoneFormats = <(String, List<int>)>[
+  ('+353', [2, 3, 4]), ('+966', [2, 3, 4]), ('+971', [2, 3, 4]),
+  ('+968', [4, 4]),    ('+974', [4, 4]),    ('+973', [4, 4]),    ('+965', [4, 4]),
+  ('+92',  [3, 7]),    ('+64',  [2, 3, 4]), ('+61',  [3, 3, 3]),
+  ('+49',  [3, 7]),    ('+47',  [3, 2, 3]), ('+46',  [3, 3, 3]),
+  ('+45',  [2, 2, 2, 2]), ('+44', [4, 6]), ('+39', [3, 7]),
+  ('+34',  [3, 6]),    ('+33',  [1, 2, 2, 2, 2]), ('+31', [1, 4, 4]),
+  ('+30',  [3, 7]),    ('+90',  [3, 3, 4]), ('+60', [2, 4, 4]),
+  ('+1',   [3, 3, 4]),
+];
+
 String formatDialedPhone(String dialCode, String number) {
-  final trimmed = number.replaceAll(' ', '').trim();
-  final local = dialCode == '+92' ? trimmed.replaceFirst(RegExp(r'^0+'), '') : trimmed;
-  return '$dialCode $local';
+  final digits = number.replaceAll(RegExp(r'[^\d]'), '');
+  final local = dialCode == '+92' ? digits.replaceFirst(RegExp(r'^0+'), '') : digits;
+  final fmt = _kPhoneFormats.where((f) => f.$1 == dialCode).firstOrNull;
+  if (fmt == null) return '$dialCode $local';
+  final parts = <String>[];
+  var pos = 0;
+  for (final g in fmt.$2) {
+    if (pos >= local.length) break;
+    parts.add(local.substring(pos, (pos + g).clamp(0, local.length)));
+    pos += g;
+  }
+  if (pos < local.length) parts.add(local.substring(pos));
+  return '$dialCode ${parts.join(' ')}';
 }
 
 // ── Pakistani phone formatter: auto-space after 4 digits (0300 1234567) ───

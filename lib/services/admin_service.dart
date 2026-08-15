@@ -70,7 +70,13 @@ class AdminService extends ChangeNotifier {
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'cnic_verification_requests',
-          callback: (_) => loadPendingVerifications(),
+          callback: (_) async {
+            await loadPendingVerifications();
+            // Also reload the users list so hasPendingVerificationRequest
+            // gets updated on the AdminUser objects in memory
+            await loadData();
+            notifyListeners();
+          },
         )
         .subscribe();
   }
