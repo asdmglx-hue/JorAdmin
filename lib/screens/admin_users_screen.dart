@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../models/admin_models.dart';
+import '../models/admin_permissions.dart';
 import 'admin_edit_user_screen.dart';
 import 'admin_trash_screen.dart';
 import 'admin_edit_requests_screen.dart';
@@ -68,6 +69,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
   }
 
   void _showDeleteByNumberDialog(BuildContext context) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'deleting profiles')) return;
     final s = _S.of(context);
     final ctrl = TextEditingController();
     showDialog(context: context, builder: (ctx) => AlertDialog(
@@ -169,8 +171,10 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
   @override
   Widget build(BuildContext context) {
     final s = _S.of(context);
+    final canEdit = AdminPerms.i.canEdit(AdminPageKeys.users);
     return Column(
       children: [
+        const ViewOnlyBanner(pageKey: AdminPageKeys.users),
         _buildSearchBar(),
         SizedBox(height: s.s(8)),
         _buildFilterRow(),
@@ -185,7 +189,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
               featuredCreditPrice: _featuredCreditPrice,
               onEdit: () async {
                 await Navigator.push(context, MaterialPageRoute(
-                  builder: (_) => AdminEditUserScreen(user: _filtered[i], svc: widget.svc)));
+                  builder: (_) => AdminEditUserScreen(user: _filtered[i], svc: widget.svc, readOnly: !canEdit)));
                 if (mounted) setState(() {});
               },
               onView: () => Navigator.push(context, MaterialPageRoute(
@@ -565,6 +569,7 @@ class _UserCardState extends State<_UserCard> {
                             SizedBox(width: s.s(8)),
                             GestureDetector(
                               onTap: () async {
+                                if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'changing permission status')) return;
                                 final newVal = !_allowed;
                           final confirmed = await showDialog<bool>(
                             context: context,
@@ -682,9 +687,12 @@ class _UserCardState extends State<_UserCard> {
             padding: EdgeInsets.fromLTRB(_S.of(context).s(14), _S.of(context).s(10), _S.of(context).s(14), _S.of(context).s(14)),
             child: Row(
               children: [
-                _ActionBtn(icon: Icons.edit_rounded, label: 'Edit', color: kPurple, onTap: onEdit),
+                _ActionBtn(
+                  icon: AdminPerms.i.canEdit(AdminPageKeys.users) ? Icons.edit_rounded : Icons.visibility_rounded,
+                  label: AdminPerms.i.canEdit(AdminPageKeys.users) ? 'Edit' : 'View',
+                  color: kPurple, onTap: onEdit),
                 SizedBox(width: _S.of(context).s(8)),
-                if (user.subscriptionStatus == SubscriptionStatus.expired)
+                if (AdminPerms.i.canEdit(AdminPageKeys.users) && user.subscriptionStatus == SubscriptionStatus.expired)
                   _ActionBtn(
                     icon: Icons.refresh_rounded,
                     label: 'Renew',
@@ -720,7 +728,7 @@ class _UserCardState extends State<_UserCard> {
                       // Renewal notification sent automatically by edge function
                     },
                   )
-                else if (user.status != ProposalStatus.paused)
+                else if (AdminPerms.i.canEdit(AdminPageKeys.users) && user.status != ProposalStatus.paused)
                   _ActionBtn(
                     icon: Icons.pause_rounded,
                     label: 'Pause',
@@ -752,7 +760,7 @@ class _UserCardState extends State<_UserCard> {
                       );
                     },
                   )
-                else
+                else if (AdminPerms.i.canEdit(AdminPageKeys.users))
                   _ActionBtn(
                     icon: Icons.play_arrow_rounded,
                     label: 'Resume',
@@ -783,17 +791,21 @@ class _UserCardState extends State<_UserCard> {
                         ),
                       );
                     },
+                  )
+                else
+                  const SizedBox.shrink(),
+                const SizedBox(width: 8),
+                if (AdminPerms.i.canEdit(AdminPageKeys.users)) ...[
+                  _ActionBtn(
+                    icon: Icons.star_rounded,
+                    label: 'Featured',
+                    color: kAmber,
+                    disabled: user.subscriptionStatus == SubscriptionStatus.expired,
+                    onTap: () => _showFeaturedSheet(context),
                   ),
-                const SizedBox(width: 8),
-                _ActionBtn(
-                  icon: Icons.star_rounded,
-                  label: 'Featured',
-                  color: kAmber,
-                  disabled: user.subscriptionStatus == SubscriptionStatus.expired,
-                  onTap: () => _showFeaturedSheet(context),
-                ),
-                const SizedBox(width: 8),
-                _ActionBtn(icon: Icons.delete_outline_rounded, label: 'Trash', color: kRose, onTap: () => _confirmDelete(context)),
+                  const SizedBox(width: 8),
+                  _ActionBtn(icon: Icons.delete_outline_rounded, label: 'Trash', color: kRose, onTap: () => _confirmDelete(context)),
+                ],
               ],
             ),
           ),
@@ -804,6 +816,7 @@ class _UserCardState extends State<_UserCard> {
   }
 
   void _confirmDelete(BuildContext context) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'deleting profiles')) return;
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -834,6 +847,7 @@ class _UserCardState extends State<_UserCard> {
   }
 
   void _showFeaturedSheet(BuildContext context) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'featured posts')) return;
     final messenger = ScaffoldMessenger.of(context);
     showModalBottomSheet(
       context: context,
@@ -882,6 +896,7 @@ class _UserCardState extends State<_UserCard> {
   String _date(DateTime d) => '${d.day}/${d.month}/${d.year % 100}';
 
   void _showSetDaysDialog(BuildContext context) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'changing subscription days')) return;
     final daysCtrl = TextEditingController();
     bool saving = false;
     String? error;
@@ -964,6 +979,7 @@ class _UserCardState extends State<_UserCard> {
   // Long-press entry point on AI-imported cards only — offers to approve
   // (which opens the full form below) or explicitly leave it unapproved.
   void _showAiApprovalMenu(BuildContext context) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'approving profiles')) return;
     HapticFeedback.mediumImpact();
     showModalBottomSheet(
       context: context,

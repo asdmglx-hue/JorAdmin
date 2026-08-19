@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/supabase_service.dart';
+import '../models/admin_permissions.dart';
 import '../services/admin_supabase_extension.dart';
 import '../models/admin_models.dart';
 import '../utils/theme.dart';
@@ -176,6 +177,7 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
   }
 
   Future<void> _save() async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.pricing, what: 'saving prices')) return;
     // Validate
     final sp  = int.tryParse(_standardPriceCtrl.text.trim());
     final sd  = int.tryParse(_standardDaysCtrl.text.trim());
@@ -330,6 +332,7 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
   }
 
   Future<void> _onToggleHelpCenter() async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.pricing, what: 'changing this setting')) return;
     if (_helpCenterEnabled) {
       // Turning off never needs a check.
       setState(() => _helpCenterEnabled = false);
@@ -359,11 +362,16 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return _loading
-        ? const Center(child: CircularProgressIndicator(color: kPurple))
-        : _error != null
-            ? _buildError()
-            : _buildContent();
+    return Column(children: [
+      const ViewOnlyBanner(pageKey: AdminPageKeys.pricing),
+      Expanded(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator(color: kPurple))
+            : _error != null
+                ? _buildError()
+                : _buildContent(),
+      ),
+    ]);
   }
 
   Widget _buildError() {
@@ -1001,6 +1009,7 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
   }
 
   Future<void> _showAddDialog() async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.pricing, what: 'adding coupons')) return;
     final codeCtrl = TextEditingController();
     final percentCtrl = TextEditingController();
     final freeDaysCtrl = TextEditingController();
@@ -1241,6 +1250,7 @@ class _CouponCodesSectionState extends State<_CouponCodesSection> {
   }
 
   Future<void> _confirmDelete(CouponCode c) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.pricing, what: 'deleting coupons')) return;
     final s = _S.of(context);
     final confirmed = await showDialog<bool>(
       context: context,

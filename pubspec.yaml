@@ -1,5 +1,5 @@
-name: jor_admin
-description: Jor – Admin Panel
+﻿name: jor_admin
+description: Jor â€“ Admin Panel
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -47,3 +47,7 @@ flutter_launcher_icons:
   image_path: "assets/icon/admin_app_icon.png"
   adaptive_icon_background: "#1C1A30"
   adaptive_icon_foreground: "assets/icon/admin_app_icon_foreground.png"
+
+
+
+

@@ -10,6 +10,7 @@ import 'package:image_picker/image_picker.dart';
 import '../services/ai_parse_service.dart';
 import '../widgets/photo_crop_dialog.dart';
 import '../services/admin_service.dart';
+import '../models/admin_permissions.dart';
 import '../utils/theme.dart';
 import '../services/supabase_service.dart';
 import '../widgets/country_picker.dart' show CountryCode;
@@ -442,6 +443,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
   }
 
   Future<void> _save() async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.orders, what: 'importing profiles')) return;
     if (_nameCtrl.text.trim().isEmpty)  { _err('Name is required');   return; }
     if (_ageCtrl.text.trim().isEmpty)   { _err('Age is required');    return; }
     if (_phoneCtrl.text.trim().isEmpty) { _err('Phone is required');  return; }

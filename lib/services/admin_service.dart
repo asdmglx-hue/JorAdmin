@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/admin_models.dart';
+import '../models/admin_permissions.dart';
 import 'supabase_service.dart';
 import 'admin_supabase_extension.dart';
 
@@ -98,7 +99,9 @@ class AdminService extends ChangeNotifier {
   // without re-fetching the whole table. Set up once, after login.
   RealtimeChannel? _syncChannel;
 
-  static const String _adminPin = '786786';
+  /// The admin_accounts row of whoever is currently signed in.
+  AdminAccount? _currentAccount;
+  AdminAccount? get currentAccount => _currentAccount;
 
   List<AdminUser> get users => List.unmodifiable(_users);
   List<ActivationCode> get codes => List.unmodifiable(_codes);
@@ -110,21 +113,68 @@ class AdminService extends ChangeNotifier {
   int get affiliateTrashCount => _affiliateTrashCount;
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  bool login(String pin) {
-    if (pin == _adminPin) {
-      _isLoggedIn = true;
-      notifyListeners();
-      loadData(); // kick off real data load after login
-      _startRealtimeSync();
-      loadPendingVerifications();
-      _startVerificationSync();
-      return true;
+  //  CNIC + password, checked against admin_accounts. Returns:
+  //    null            → signed in
+  //    'invalid'       → wrong CNIC or password
+  //    'offline'       → could not reach the server
+  Future<String?> loginWithCredentials(String cnic, String password) async {
+    Map<String, dynamic>? row;
+    try {
+      row = await _db.adminPanelLogin(cnic, password);
+    } catch (e) {
+      debugPrint('[loginWithCredentials] error: $e');
+      return 'offline';
     }
-    return false;
+    if (row == null) return 'invalid';
+
+    final permissions = parseAdminPermissions(row['permissions']);
+    _currentAccount = AdminAccount(
+      id: row['id'] as String,
+      name: (row['name'] as String?) ?? 'Admin',
+      cnic: (row['cnic'] as String?) ?? '',
+      password: '',
+      createdAt: DateTime.now(),
+      isSuper: row['is_super'] == true,
+      permissions: permissions,
+    );
+
+    AdminPerms.i.apply(
+      id: _currentAccount!.id,
+      name: _currentAccount!.name,
+      cnic: _currentAccount!.cnic,
+      isSuper: _currentAccount!.isSuper,
+      permissions: permissions,
+    );
+
+    // Background session used by the database write policies. If it fails,
+    // most pages still work, so warn instead of blocking the login.
+    final sessionOk = await _db.ensurePanelSession();
+    if (!sessionOk) {
+      AdminPerms.messengerKey.currentState?.showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Color(0xFF3A1730),
+          content: Text(
+            'Connected, but the server session did not open. Ads, affiliates and content may not save.',
+            style: TextStyle(color: Colors.white, fontSize: 13),
+          ),
+        ),
+      );
+    }
+
+    _isLoggedIn = true;
+    notifyListeners();
+    loadData(); // kick off real data load after login
+    _startRealtimeSync();
+    loadPendingVerifications();
+    _startVerificationSync();
+    return null;
   }
 
   void logout() {
     _isLoggedIn = false;
+    _currentAccount = null;
+    AdminPerms.i.clear();
     _users = [];
     _codes = [];
     _syncChannel?.unsubscribe();
@@ -488,8 +538,13 @@ class AdminService extends ChangeNotifier {
     required String name,
     required String cnic,
     required String password,
+    bool isSuper = false,
+    Map<String, String> permissions = const {},
   }) async {
-    final err = await _db.createAdminAccount(name: name, cnic: cnic, password: password);
+    final err = await _db.createAdminAccount(
+      name: name, cnic: cnic, password: password,
+      isSuper: isSuper, permissions: permissions,
+    );
     if (err == null) await loadAdminAccounts();
     return err;
   }
@@ -500,9 +555,29 @@ class AdminService extends ChangeNotifier {
     required String name,
     required String cnic,
     required String password,
+    bool isSuper = false,
+    Map<String, String> permissions = const {},
   }) async {
-    final err = await _db.updateAdminAccount(id: id, name: name, cnic: cnic, password: password);
-    if (err == null) await loadAdminAccounts();
+    final err = await _db.updateAdminAccount(
+      id: id, name: name, cnic: cnic, password: password,
+      isSuper: isSuper, permissions: permissions,
+    );
+    if (err == null) {
+      await loadAdminAccounts();
+      // If an admin edited their own account, refresh the live permissions
+      // so the change takes effect without a re-login.
+      if (_currentAccount?.id == id) {
+        _currentAccount = AdminAccount(
+          id: id, name: name, cnic: cnic.replaceAll('-', ''), password: '',
+          createdAt: _currentAccount!.createdAt,
+          isSuper: isSuper, permissions: permissions,
+        );
+        AdminPerms.i.apply(
+          id: id, name: name, cnic: cnic.replaceAll('-', ''),
+          isSuper: isSuper, permissions: permissions,
+        );
+      }
+    }
     return err;
   }
 

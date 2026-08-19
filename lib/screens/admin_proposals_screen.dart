@@ -5,6 +5,7 @@ import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../services/supabase_service.dart';
 import '../models/admin_models.dart';
+import '../models/admin_permissions.dart';
 import 'admin_edit_user_screen.dart';
 import 'admin_trash_screen.dart';
 
@@ -83,8 +84,11 @@ class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
           (numSearch != null && u.proposalNumber == numSearch)
         ).toList();
 
+        final canEdit = AdminPerms.i.canEdit(AdminPageKeys.orders);
+
         return Column(
           children: [
+            const ViewOnlyBanner(pageKey: AdminPageKeys.orders),
             // ── Toggle + Search ──
             Padding(
               padding: EdgeInsets.fromLTRB(_S.of(context).s(16), _S.of(context).s(12), _S.of(context).s(16), 0),
@@ -182,7 +186,7 @@ class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
                       if (_showApproved) {
                         return _ApprovedCard(user: u, svc: widget.svc, onView: () async {
                           await Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => AdminEditUserScreen(user: u, svc: widget.svc)));
+                            MaterialPageRoute(builder: (_) => AdminEditUserScreen(user: u, svc: widget.svc, readOnly: !canEdit)));
                           widget.svc.notifyListeners();
                         });
                       }
@@ -191,7 +195,7 @@ class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
                         svc: widget.svc,
                         onEdit: () async {
                           await Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => AdminEditUserScreen(user: u, svc: widget.svc)));
+                            MaterialPageRoute(builder: (_) => AdminEditUserScreen(user: u, svc: widget.svc, readOnly: !canEdit)));
                           widget.svc.notifyListeners();
                         },
                       );
@@ -580,7 +584,7 @@ class _PendingCard extends StatelessWidget {
             ),
           ],
           SizedBox(height: _S.of(context).s(12)),
-          Row(
+          if (AdminPerms.i.canEdit(AdminPageKeys.orders)) Row(
             children: [
               Expanded(child: _ActBtn(
                 label: 'Approve', icon: Icons.check_rounded, color: kGreen,

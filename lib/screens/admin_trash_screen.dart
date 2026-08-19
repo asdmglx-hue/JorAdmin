@@ -5,6 +5,7 @@ import '../services/admin_service.dart';
 import '../services/supabase_service.dart';
 import '../utils/realtime_refresh.dart';
 import '../models/admin_models.dart';
+import '../models/admin_permissions.dart';
 import 'admin_edit_user_screen.dart';
 
 // ── Responsive scale helper ────────────────────────────────────────────────
@@ -88,6 +89,7 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
   }
 
   Future<void> _restoreAffiliate(String id) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.affiliate, what: 'restoring affiliates')) return;
     try {
       await _db.client.from('affiliates').update({'deleted': false, 'deleted_at': null}).eq('id', id);
       _loadDeletedAffiliates();
@@ -95,6 +97,7 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
   }
 
   Future<void> _permanentDeleteAffiliate(String id) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.affiliate, what: 'deleting affiliates')) return;
     try {
       await _db.client.from('affiliates').delete().eq('id', id);
       _loadDeletedAffiliates();
@@ -131,6 +134,7 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
   }
 
   Future<void> _deleteAllAffiliates() async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.affiliate, what: 'deleting affiliates')) return;
     try {
       await _db.client.from('affiliates').delete().eq('deleted', true);
       _loadDeletedAffiliates();
@@ -144,6 +148,7 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
   // why. Continues past failures instead of stopping the whole batch, then
   // reports how many actually succeeded.
   Future<void> _deleteAllUsers(BuildContext context, List<AdminUser> users) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'permanently deleting profiles')) return;
     final failed = <String>[];
     for (final u in users) {
       try {
@@ -654,6 +659,7 @@ class _TrashCard extends StatelessWidget {
   }
 
   void _confirmPermanentDelete(BuildContext context) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'permanently deleting profiles')) return;
     final s = _S.of(context);
     showDialog(
       context: context,

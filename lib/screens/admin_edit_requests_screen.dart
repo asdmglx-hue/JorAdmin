@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/theme.dart';
+import '../models/admin_permissions.dart';
 
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
@@ -270,6 +271,7 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
   }
 
   Future<void> _setReportStatus(ProfileReport r, String status) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'changing report status')) return;
     // Optimistic — update locally first so the tap feels instant, matching
     // the pattern _RequestCard's tick/cross already uses elsewhere in
     // this same screen.
@@ -383,6 +385,7 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
   /// 'applied' rows — keeps history accurate and stays within the DB's
   /// allowed status values.
   Future<void> _revertField(EditRequest req, FieldChange diff) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'reverting edits')) return;
     final confirmed = await _confirm(
       context,
       title: 'Reject this change?',
@@ -439,6 +442,7 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
   /// "keep" confirmation event as before (oldValue == newValue) so the
   /// resolution algorithm correctly reads this field as resolved.
   Future<void> _keepField(EditRequest req, FieldChange field) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'approving edits')) return;
     try {
       await _supabase.from('proposals')
           .update({field.key: field.newValue}).eq('id', req.proposalId);

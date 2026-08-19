@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/theme.dart';
 import '../services/supabase_service.dart';
+import '../models/admin_permissions.dart';
 import '../utils/realtime_refresh.dart';
 
 SupabaseClient get _blogDb => SupabaseService.instance.client;
@@ -146,6 +147,7 @@ class _AdminBlogCardState extends State<AdminBlogCard> {
   }
 
   void _showForm({Map<String, dynamic>? existing}) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.content, what: 'adding or editing posts')) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -155,6 +157,7 @@ class _AdminBlogCardState extends State<AdminBlogCard> {
   }
 
   Future<void> _delete(String id) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.content, what: 'deleting posts')) return;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -173,6 +176,7 @@ class _AdminBlogCardState extends State<AdminBlogCard> {
   }
 
   Future<void> _togglePublished(Map<String, dynamic> post) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.content, what: 'publishing posts')) return;
     final current = post['is_published'] as bool? ?? true;
     setState(() {
       final idx = _posts.indexWhere((p) => p['id'] == post['id']);

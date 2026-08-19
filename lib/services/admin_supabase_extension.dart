@@ -249,12 +249,17 @@ extension AdminSupabaseExtension on SupabaseService {
     required String name,
     required String cnic,
     required String password,
+    bool isSuper = false,
+    Map<String, String> permissions = const {},
   }) async {
     try {
       await client.from('admin_accounts').insert({
         'name': name,
-        'cnic': cnic,
+        // CNIC is always stored digits-only so login matching is consistent.
+        'cnic': cnic.replaceAll('-', ''),
         'password': password,
+        'is_super': isSuper,
+        'permissions': isSuper ? <String, String>{} : permissions,
       });
       notify();
       return null;
@@ -272,12 +277,16 @@ extension AdminSupabaseExtension on SupabaseService {
     required String name,
     required String cnic,
     required String password,
+    bool isSuper = false,
+    Map<String, String> permissions = const {},
   }) async {
     try {
       await client.from('admin_accounts').update({
         'name': name,
-        'cnic': cnic,
+        'cnic': cnic.replaceAll('-', ''),
         'password': password,
+        'is_super': isSuper,
+        'permissions': isSuper ? <String, String>{} : permissions,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', id);
       notify();

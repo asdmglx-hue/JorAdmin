@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/theme.dart';
 import '../services/supabase_service.dart';
 import '../utils/realtime_refresh.dart';
+import '../models/admin_permissions.dart';
 import 'admin_blog_screen.dart';
 import 'admin_ads_screen.dart';
 
@@ -62,6 +63,7 @@ class _AdminTestimonialsScreenState extends State<AdminTestimonialsScreen> {
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(children: [
+          const ViewOnlyBanner(pageKey: AdminPageKeys.content),
           _StoriesCard(onRefreshCallback: (cb) => _refreshStories = cb),
           const SizedBox(height: 16),
           AdminBlogCard(onRefreshCallback: (cb) => _refreshBlog = cb),
@@ -129,6 +131,7 @@ class _StoriesCardState extends State<_StoriesCard> {
   }
 
   void _showForm({Map<String, dynamic>? existing}) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.content, what: 'adding or editing stories')) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -138,6 +141,7 @@ class _StoriesCardState extends State<_StoriesCard> {
   }
 
   Future<void> _delete(String id) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.content, what: 'deleting stories')) return;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -156,6 +160,7 @@ class _StoriesCardState extends State<_StoriesCard> {
   }
 
   Future<void> _togglePublished(Map<String, dynamic> item) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.content, what: 'publishing stories')) return;
     final current = item['is_published'] as bool? ?? true;
     setState(() {
       final idx = _items.indexWhere((c) => c['id'] == item['id']);
@@ -180,6 +185,7 @@ class _StoriesCardState extends State<_StoriesCard> {
   }
 
   Future<void> _onReorder(int oldIndex, int newIndex) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.content, what: 'reordering stories')) return;
     setState(() {
       if (newIndex > oldIndex) newIndex -= 1;
       final moved = _items.removeAt(oldIndex);
@@ -648,7 +654,8 @@ class _Field extends StatelessWidget {
 // (user app + website). Each toggle writes to app_settings in Supabase
 // so changes sync instantly across all platforms.
 class VerificationSettingsCard extends StatefulWidget {
-  const VerificationSettingsCard({super.key});
+  final void Function(VoidCallback)? onRefreshCallback;
+  const VerificationSettingsCard({super.key, this.onRefreshCallback});
   @override State<VerificationSettingsCard> createState() => _VerificationSettingsCardState();
 }
 
@@ -667,6 +674,7 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
   @override
   void initState() {
     super.initState();
+    widget.onRefreshCallback?.call(_load);
     _load();
   }
 
@@ -687,6 +695,7 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
   }
 
   Future<void> _toggle(String key, bool value) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.verification, what: 'changing verification settings')) return;
     try {
       await _db.rpc('admin_upsert_setting', params: {'p_key': key, 'p_value': value.toString()});
       await SupabaseService.instance.fetchAppSettings();
@@ -828,6 +837,7 @@ class _DataManagementCardState extends State<DataManagementCard> {
   }
 
   Future<void> _delete(String table, dynamic id) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.content, what: 'deleting list items')) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -849,6 +859,7 @@ class _DataManagementCardState extends State<DataManagementCard> {
   }
 
   void _showAddDialog() {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.content, what: 'adding list items')) return;
     final names = ['Castes', 'Cities', 'Occupations'];
     final tables = ['castes', 'cities', 'occupations'];
     final groups = [_casteGroups, _cityProvinces, _occCategories];

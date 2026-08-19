@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/theme.dart';
 import '../services/supabase_service.dart';
+import '../models/admin_permissions.dart';
 import '../utils/realtime_refresh.dart';
 
 SupabaseClient get _adsDb => SupabaseService.instance.client;
@@ -58,6 +59,7 @@ class _AdminAdsCardState extends State<AdminAdsCard> {
   }
 
   void _showForm({Map<String, dynamic>? existing}) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.ads, what: 'adding or editing ads')) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -67,6 +69,7 @@ class _AdminAdsCardState extends State<AdminAdsCard> {
   }
 
   Future<void> _delete(String id) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.ads, what: 'deleting ads')) return;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -85,6 +88,7 @@ class _AdminAdsCardState extends State<AdminAdsCard> {
   }
 
   Future<void> _toggleActive(Map<String, dynamic> ad) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.ads, what: 'turning ads on or off')) return;
     final current = ad['is_active'] as bool? ?? true;
     setState(() {
       final idx = _ads.indexWhere((a) => a['id'] == ad['id']);

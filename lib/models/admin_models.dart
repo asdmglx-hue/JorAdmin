@@ -71,12 +71,20 @@ class AdminAccount {
   final String password;
   final DateTime createdAt;
 
+  /// Full access to every admin page (view + edit).
+  final bool isSuper;
+
+  /// Per-page access: { page key : 'view' | 'edit' }. Ignored when isSuper.
+  final Map<String, String> permissions;
+
   const AdminAccount({
     required this.id,
     required this.name,
     required this.cnic,
     required this.password,
     required this.createdAt,
+    this.isSuper = false,
+    this.permissions = const {},
   });
 
   factory AdminAccount.fromMap(Map<String, dynamic> map) => AdminAccount(
@@ -85,7 +93,21 @@ class AdminAccount {
         cnic: map['cnic'] as String,
         password: map['password'] as String,
         createdAt: DateTime.parse(map['created_at'] as String),
+        isSuper: map['is_super'] == true,
+        permissions: parseAdminPermissions(map['permissions']),
       );
+}
+
+/// Safely turns the jsonb `permissions` column into a { page : level } map.
+Map<String, String> parseAdminPermissions(dynamic raw) {
+  if (raw is Map) {
+    final out = <String, String>{};
+    raw.forEach((k, v) {
+      if (v == 'view' || v == 'edit') out[k.toString()] = v as String;
+    });
+    return out;
+  }
+  return {};
 }
 
 // ── Coupon codes ─────────────────────────────────────────────────────────

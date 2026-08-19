@@ -11,6 +11,7 @@ import '../services/admin_service.dart';
 import '../models/admin_models.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/supabase_service.dart';
+import '../models/admin_permissions.dart';
 import '../services/admin_supabase_extension.dart';
 import '../widgets/country_picker.dart';
 import '../widgets/occupation_picker.dart';
@@ -420,6 +421,13 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   }
 
   void _save() {
+    // Extra backstop — the screen is already opened read-only for view-only
+    // admins, but never let a save through without edit rights on either tab.
+    if (!AdminPerms.i.canEdit(AdminPageKeys.users) &&
+        !AdminPerms.i.canEdit(AdminPageKeys.orders)) {
+      AdminPerms.i.denied(what: 'saving profile changes');
+      return;
+    }
     if (!_hasChanges) return;
     final updated = _buildUpdated();
     widget.svc.updateUser(updated);

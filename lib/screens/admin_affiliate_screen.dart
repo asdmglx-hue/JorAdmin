@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../utils/theme.dart';
 import '../services/supabase_service.dart';
+import '../models/admin_permissions.dart';
 import '../utils/realtime_refresh.dart';
 
 const _kBg     = Color(0xFF16132A);
@@ -99,6 +100,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
   void _cancelSelect() => setState(() { _selecting = false; _selectedIds.clear(); });
 
   Future<void> _deleteSelected() async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.affiliate, what: 'deleting affiliates')) return;
     final ids = List<String>.from(_selectedIds);
     // Remove instantly from local list — no flicker
     _cancelSelect();
@@ -187,6 +189,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
   }
 
   Future<void> _deleteAffiliate(String id) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.affiliate, what: 'deleting affiliates')) return;
     // Remove instantly from local list — no flicker
     setState(() => _affiliates.removeWhere((a) => a['id'] == id));
     widget.onAffiliateDeleted?.call();
@@ -215,6 +218,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
   }
 
   void _showAddDialog() {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.affiliate, what: 'adding affiliates')) return;
     showModalBottomSheet(
       context: context,
       useRootNavigator: true,
@@ -483,6 +487,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
   }
 
   void _toggleCenter(String id, bool currentValue) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.affiliate, what: 'changing affiliates')) return;
     setState(() {
       final idx = _affiliates.indexWhere((a) => a['id'] == id);
       if (idx != -1) _affiliates[idx]['is_center'] = !currentValue;
@@ -495,6 +500,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
   }
 
   void _showLongPressMenu(Map<String, dynamic> affiliate) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.affiliate, what: 'changing affiliates')) return;
     HapticFeedback.mediumImpact();
     final id = affiliate['id'] as String;
     final isCenter = affiliate['is_center'] == true;
@@ -523,6 +529,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
   }
 
   void _confirmDelete(String id) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.affiliate, what: 'deleting affiliates')) return;
     showDialog(context: context, builder: (_) => AlertDialog(
       backgroundColor: _kCard,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -537,6 +544,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
   }
 
   void _confirmDeleteSelected() {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.affiliate, what: 'deleting affiliates')) return;
     final count = _selectedIds.length;
     showDialog(context: context, builder: (_) => AlertDialog(
       backgroundColor: _kCard,
@@ -571,6 +579,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
     return Container(
       color: _kBg,
       child: Column(children: [
+        const ViewOnlyBanner(pageKey: AdminPageKeys.affiliate),
         Padding(
           padding: EdgeInsets.fromLTRB(_S.of(context).s(16), _S.of(context).s(16), _S.of(context).s(16), 0),
           child: Column(children: [

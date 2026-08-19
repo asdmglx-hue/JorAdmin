@@ -177,6 +177,70 @@ class SupabaseService extends ChangeNotifier {
 
   /// Admin signs in with email + password (replaces hardcoded PIN check).
   // Returns: true = success, false = wrong PIN, null = no internet
+  // ── Admin panel login (CNIC + password) ───────────────────────────────────
+  //
+  //  The panel no longer has a PIN. An admin signs in with the CNIC +
+  //  password that was assigned to them in Settings → Create Admin, and
+  //  those credentials are checked against public.admin_accounts by the
+  //  admin_panel_login() RPC, which also returns their page permissions.
+  //
+  //  Separately, the app still opens ONE shared Supabase Auth session in
+  //  the background. That session is what the database policies for ads,
+  //  affiliates, blog posts, testimonials and admin_accounts expect, so
+  //  keeping it means none of the existing table permissions had to be
+  //  loosened when the PIN screen was removed.
+  static const String kPanelServiceEmail = 'admin@jorapp.com';
+  static const String kPanelServicePassword = 'JorPanel#2026#Kx9raf';
+
+  /// Verifies CNIC + password. Returns the admin's row (id, name, cnic,
+  /// is_super, permissions) on success, null on wrong credentials, and
+  /// throws on network/server failure so the UI can tell them apart.
+  Future<Map<String, dynamic>?> adminPanelLogin(String cnic, String password) async {
+    final res = await _client.rpc('admin_panel_login', params: {
+      'p_cnic': cnic.replaceAll('-', '').trim(),
+      'p_password': password.trim(),
+    });
+    if (res == null) return null;
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Opens (or reuses) the shared Supabase Auth session used for writes.
+  /// Returns false if it could not be established — the panel still works
+  /// for most screens, so this is reported as a warning, not a hard block.
+  Future<bool> ensurePanelSession() async {
+    try {
+      if (_client.auth.currentSession != null) return true;
+      final res = await _client.auth.signInWithPassword(
+        email: kPanelServiceEmail,
+        password: kPanelServicePassword,
+      );
+      return res.user != null;
+    } catch (e) {
+      debugPrint('[ensurePanelSession] failed: $e');
+      return false;
+    }
+  }
+
+  /// Lets a logged-in admin change their own password.
+  /// Returns null on success, or an error message.
+  Future<String?> changeAdminPassword({
+    required String id,
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    try {
+      final ok = await _client.rpc('admin_panel_change_password', params: {
+        'p_id': id,
+        'p_old_password': oldPassword.trim(),
+        'p_new_password': newPassword.trim(),
+      });
+      if (ok == true) return null;
+      return 'Current password is incorrect.';
+    } catch (e) {
+      return 'Could not change password. Check your connection.';
+    }
+  }
+
   Future<bool?> adminLogin(String email, String password) async {
     try {
       final res = await _client.auth.signInWithPassword(

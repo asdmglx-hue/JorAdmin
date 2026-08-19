@@ -9,7 +9,7 @@ plugins {
 
 android {
     namespace = "com.example.jor_admin"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

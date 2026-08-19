@@ -7,6 +7,7 @@ import 'firebase_options.dart';
 import 'utils/theme.dart';
 import 'services/fcm_service.dart';
 import 'services/supabase_service.dart';
+import 'models/admin_permissions.dart';
 import 'screens/admin_login_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,6 +79,8 @@ class JorAdminApp extends StatelessWidget {
     return MaterialApp(
       title: 'Jor Admin',
       debugShowCheckedModeBanner: false,
+      // Lets permission messages be shown from anywhere in the app.
+      scaffoldMessengerKey: AdminPerms.messengerKey,
       theme: buildAppTheme(),
       home: const AdminLoginScreen(),
     );

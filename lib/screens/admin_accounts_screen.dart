@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../models/admin_models.dart';
+import '../models/admin_permissions.dart';
 import 'admin_edit_user_screen.dart'; // formatCnicDisplay
 
 // ── Responsive scale helper ────────────────────────────────────────────────
@@ -36,10 +37,10 @@ class _CnicFormatter extends TextInputFormatter {
 }
 
 // ── AdminAccountsScreen ─────────────────────────────────────────────────────
-// Dashboard → Settings → Create Admin. Lets the admin create, update, list,
-// and remove CNIC+password logins. Logging in with one of these on the
-// regular login screen unlocks full (unblurred/unmasked) viewing of every
-// profile — it is unrelated to this Admin Panel's own PIN login.
+// Dashboard → Settings → Create Admin. Lets the main admin create, update,
+// list and remove CNIC + password logins. These are the SAME credentials used
+// to sign in to this Admin Panel, and each account carries a permission map
+// that decides which pages it can open and whether it can edit them.
 class AdminAccountsScreen extends StatefulWidget {
   final AdminService svc;
   const AdminAccountsScreen({super.key, required this.svc});
@@ -248,6 +249,8 @@ class _AdminAccountCard extends StatelessWidget {
             Text(account.name, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: s.f(14))),
             SizedBox(height: s.s(2)),
             Text(formatCnicDisplay(account.cnic), style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: s.f(12), letterSpacing: 0.3)),
+            SizedBox(height: s.s(6)),
+            _accessSummary(s, account),
           ]),
         ),
         GestureDetector(
@@ -272,6 +275,34 @@ class _AdminAccountCard extends StatelessWidget {
   }
 }
 
+// Small line under each account showing what it can reach.
+Widget _accessSummary(_S s, AdminAccount a) {
+  if (a.isSuper) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: s.s(8), vertical: s.s(3)),
+      decoration: BoxDecoration(
+        color: kGreen.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(s.s(6)),
+      ),
+      child: Text('Full access — all pages',
+          style: TextStyle(color: kGreen, fontSize: s.f(10.5), fontWeight: FontWeight.w700)),
+    );
+  }
+  final edit = a.permissions.values.where((v) => v == 'edit').length;
+  final view = a.permissions.values.where((v) => v == 'view').length;
+  final total = edit + view;
+  return Text(
+    total == 0
+        ? 'No pages assigned yet'
+        : '$total page${total == 1 ? '' : 's'} · $edit can edit, $view view only',
+    style: TextStyle(
+      color: total == 0 ? kRose.withOpacity(0.8) : Colors.white.withOpacity(0.4),
+      fontSize: s.f(10.5),
+      fontWeight: FontWeight.w600,
+    ),
+  );
+}
+
 // ── Create / Edit form dialog ───────────────────────────────────────────────
 class _AdminAccountFormDialog extends StatefulWidget {
   final AdminService svc;
@@ -291,15 +322,63 @@ class _AdminAccountFormDialogState extends State<_AdminAccountFormDialog> {
   String? _error;
   int _cnicDigits = 0;
 
+  // ── Page permissions ──
+  bool _fullAccess = false;
+  bool _pagesOpen = false;
+  // page key -> 'view' | 'edit'  (absent = no access at all)
+  final Map<String, String> _perms = {};
+
   bool get _isEdit => widget.existing != null;
 
   @override
   void initState() {
     super.initState();
     _nameCtrl = TextEditingController(text: widget.existing?.name ?? '');
-    _cnicCtrl = TextEditingController(text: widget.existing?.cnic ?? '');
+    _cnicCtrl = TextEditingController(text: formatCnicDisplay(widget.existing?.cnic ?? ''));
     _passCtrl = TextEditingController(text: widget.existing?.password ?? '');
     _cnicDigits = (widget.existing?.cnic ?? '').replaceAll('-', '').length;
+    _fullAccess = widget.existing?.isSuper ?? false;
+    _perms.addAll(widget.existing?.permissions ?? const <String, String>{});
+    // A brand-new admin starts with the list open so permissions aren't missed.
+    _pagesOpen = !_isEdit;
+  }
+
+  bool get _allChecked =>
+      _fullAccess || kAdminPages.every((p) => _perms.containsKey(p.key));
+
+  void _toggleAll(bool on) {
+    setState(() {
+      _error = null;
+      if (on) {
+        _fullAccess = true;
+        _perms
+          ..clear()
+          ..addEntries(kAdminPages.map((p) => MapEntry(p.key, AdminAccess.edit)));
+      } else {
+        _fullAccess = false;
+        _perms.clear();
+      }
+    });
+  }
+
+  void _togglePage(String key, bool on) {
+    setState(() {
+      _error = null;
+      _fullAccess = false;
+      if (on) {
+        _perms[key] = AdminAccess.view;
+      } else {
+        _perms.remove(key);
+      }
+    });
+  }
+
+  void _setLevel(String key, String level) {
+    setState(() {
+      _error = null;
+      _fullAccess = false;
+      _perms[key] = level;
+    });
   }
 
   @override
@@ -328,11 +407,24 @@ class _AdminAccountFormDialogState extends State<_AdminAccountFormDialog> {
       return;
     }
 
+    if (!_fullAccess && _perms.isEmpty) {
+      setState(() => _error = 'Pick at least one page, or tick Full access');
+      return;
+    }
+
     setState(() { _saving = true; _error = null; });
 
+    // Ticking every page is the same thing as full access.
+    final isSuper = _fullAccess || kAdminPages.every((p) => _perms[p.key] == AdminAccess.edit);
+    final perms = isSuper ? <String, String>{} : Map<String, String>.from(_perms);
+
     final err = _isEdit
-        ? await widget.svc.updateAdminAccount(id: widget.existing!.id, name: name, cnic: cnic, password: pass)
-        : await widget.svc.createAdminAccount(name: name, cnic: cnic, password: pass);
+        ? await widget.svc.updateAdminAccount(
+            id: widget.existing!.id, name: name, cnic: cnic, password: pass,
+            isSuper: isSuper, permissions: perms)
+        : await widget.svc.createAdminAccount(
+            name: name, cnic: cnic, password: pass,
+            isSuper: isSuper, permissions: perms);
 
     if (!mounted) return;
 
@@ -356,7 +448,10 @@ class _AdminAccountFormDialogState extends State<_AdminAccountFormDialog> {
         Text(_isEdit ? 'Update Admin' : 'Create Admin',
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
       ]),
-      content: SingleChildScrollView(
+      contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           // Name field
           TextField(
@@ -401,12 +496,14 @@ class _AdminAccountFormDialogState extends State<_AdminAccountFormDialog> {
               ),
             ),
           ),
+          const SizedBox(height: 16),
+          _buildPermissionsSection(),
           if (_error != null) ...[
             const SizedBox(height: 8),
             Text(_error!, style: const TextStyle(fontSize: 12, color: kRose)),
           ],
         ]),
-      ),
+      )),
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.pop(context),
@@ -423,6 +520,144 @@ class _AdminAccountFormDialogState extends State<_AdminAccountFormDialog> {
           ),
         ),
       ],
+    );
+  }
+
+  // ── Page access dropdown ─────────────────────────────────────────────────
+  //  Lists every page of the panel. Tick a page to give access, then choose
+  //  View or Edit for it. Ticking "All pages" gives full access to everything.
+  Widget _buildPermissionsSection() {
+    final chosen = _fullAccess ? kAdminPages.length : _perms.length;
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: Column(children: [
+        // Dropdown header
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() => _pagesOpen = !_pagesOpen),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(children: [
+              Icon(Icons.lock_open_rounded, color: Colors.white.withOpacity(0.4), size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Page access',
+                      style: TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text(
+                    _fullAccess
+                        ? 'Full access — all pages'
+                        : chosen == 0
+                            ? 'No pages selected'
+                            : '$chosen of ${kAdminPages.length} pages selected',
+                    style: TextStyle(
+                        color: _fullAccess ? kGreen : Colors.white.withOpacity(0.4),
+                        fontSize: 11.5),
+                  ),
+                ]),
+              ),
+              AnimatedRotation(
+                turns: _pagesOpen ? 0.5 : 0,
+                duration: const Duration(milliseconds: 150),
+                child: Icon(Icons.keyboard_arrow_down_rounded,
+                    color: Colors.white.withOpacity(0.5), size: 22),
+              ),
+            ]),
+          ),
+        ),
+        if (_pagesOpen) ...[
+          Divider(height: 1, color: Colors.white.withOpacity(0.08)),
+          // Select all
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 12, 4),
+            child: Row(children: [
+              _checkbox(_allChecked, (v) => _toggleAll(v)),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text('All pages (full access)',
+                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+              ),
+            ]),
+          ),
+          Divider(height: 1, color: Colors.white.withOpacity(0.08)),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 260),
+            child: SingleChildScrollView(
+              child: Column(
+                children: kAdminPages.map(_buildPageRow).toList(),
+              ),
+            ),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _buildPageRow(AdminPage page) {
+    final level = _fullAccess ? AdminAccess.edit : _perms[page.key];
+    final on = level != null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 2, 10, 2),
+      child: Row(children: [
+        _checkbox(on, (v) => _togglePage(page.key, v)),
+        const SizedBox(width: 4),
+        Icon(page.icon, size: 15, color: on ? kPurple : Colors.white.withOpacity(0.25)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(page.label,
+              style: TextStyle(
+                  color: on ? Colors.white : Colors.white.withOpacity(0.45),
+                  fontSize: 12.5,
+                  fontWeight: on ? FontWeight.w600 : FontWeight.w400)),
+        ),
+        if (on) ...[
+          _levelChip(page.key, AdminAccess.view, 'View', level == AdminAccess.view),
+          const SizedBox(width: 5),
+          _levelChip(page.key, AdminAccess.edit, 'Edit', level == AdminAccess.edit),
+        ],
+      ]),
+    );
+  }
+
+  Widget _checkbox(bool value, ValueChanged<bool> onChanged) {
+    return SizedBox(
+      width: 30,
+      height: 30,
+      child: Checkbox(
+        value: value,
+        onChanged: (v) => onChanged(v ?? false),
+        side: BorderSide(color: Colors.white.withOpacity(0.3)),
+        activeColor: kPurple,
+        checkColor: Colors.white,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+      ),
+    );
+  }
+
+  Widget _levelChip(String pageKey, String level, String label, bool selected) {
+    final color = level == AdminAccess.edit ? kPurple : const Color(0xFF3B82F6);
+    return GestureDetector(
+      onTap: () => _setLevel(pageKey, level),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: selected ? color.withOpacity(0.2) : Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(
+              color: selected ? color.withOpacity(0.7) : Colors.white.withOpacity(0.1)),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                color: selected ? color : Colors.white.withOpacity(0.4),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700)),
+      ),
     );
   }
 

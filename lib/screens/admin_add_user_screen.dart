@@ -9,6 +9,7 @@ import '../widgets/occupation_picker.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../services/supabase_service.dart';
+import '../models/admin_permissions.dart';
 
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
@@ -145,6 +146,7 @@ class _AdminAddUserScreenState extends State<AdminAddUserScreen> {
   }
 
   Future<void> _save() async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.orders, what: 'adding profiles')) return;
     if (_nameCtrl.text.trim().isEmpty) { _err('Name is required'); return; }
     if (_ageCtrl.text.trim().isEmpty) { _err('Age is required'); return; }
     if (_phoneCtrl.text.trim().isEmpty) { _err('Phone is required'); return; }

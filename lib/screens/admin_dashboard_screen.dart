@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/supabase_service.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../models/admin_models.dart';
+import '../models/admin_permissions.dart';
 import '../widgets/notification_bell_widget.dart';
 import 'admin_notification_screen.dart';
 import 'admin_users_screen.dart';
@@ -23,6 +25,7 @@ import 'admin_ads_screen.dart';
 import 'admin_tracking_screen.dart';
 import 'admin_accounts_screen.dart';
 import 'admin_usage_stats_screen.dart';
+import 'admin_marketing_screen.dart';
 
 // ── Thin screen wrappers for the new standalone Ads and Verification tabs ──
 // AdminAdsCard and VerificationSettingsCard are self-contained widgets
@@ -38,6 +41,7 @@ class AdminAdsScreen extends StatelessWidget {
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(children: [
+          const ViewOnlyBanner(pageKey: AdminPageKeys.ads),
           AdminAdsCard(onRefreshCallback: onRefreshCallback),
         ]),
       ),
@@ -54,8 +58,9 @@ class AdminVerificationScreen extends StatelessWidget {
       backgroundColor: const Color(0xFF0F0D1E),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        child: const Column(children: [
-          VerificationSettingsCard(),
+        child: Column(children: [
+          const ViewOnlyBanner(pageKey: AdminPageKeys.verification),
+          VerificationSettingsCard(onRefreshCallback: onRefreshCallback),
         ]),
       ),
     );
@@ -87,12 +92,29 @@ class AdminDashboardScreen extends StatefulWidget {
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     with TickerProviderStateMixin {
-  int _tab = 0;
+  // _tab is always the GLOBAL tab index (0..9), matching kAdminTabPages and
+  // the IndexedStack below, even when some tabs are hidden for this admin.
+  int _tab = AdminPerms.i.firstVisibleTabIndex;
+
+  final _perms = AdminPerms.i;
+
+  /// Tab indexes this admin is allowed to open, in order.
+  List<int> get _visibleTabIndexes {
+    final out = <int>[];
+    for (int i = 0; i < kAdminTabPages.length; i++) {
+      if (_perms.canView(kAdminTabPages[i].key)) out.add(i);
+    }
+    return out.isEmpty ? [0] : out;
+  }
+
+  String _pageKey(int index) => kAdminTabPages[index].key;
+  bool _canEditTab(int index) => _perms.canEdit(_pageKey(index));
   VoidCallback? _addAffiliate;
   VoidCallback? _refreshAffiliate;
   VoidCallback? _refreshAds;
   VoidCallback? _refreshVerification;
   VoidCallback? _refreshTestimonials;
+  final _marketingKey = GlobalKey<AdminMarketingScreenState>();
   bool _refreshing = false;
   int _affiliateTrashCount = 0;
   int _pendingCount = 0;
@@ -242,34 +264,45 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF16132A),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Settings', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Settings', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+          if (_perms.accountName.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(
+              'Signed in as ${_perms.accountName}${_perms.isSuper ? ' · full access' : ''}',
+              style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 11.5, fontWeight: FontWeight.w500),
+            ),
+          ],
+        ]),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           _SettingOption(
-            icon: Icons.pin_rounded,
+            icon: Icons.lock_reset_rounded,
             color: kPurple,
-            label: 'Change PIN',
-            onTap: () { Navigator.pop(ctx); _showChangePinDialog(ctx); },
+            label: 'Change My Password',
+            onTap: () { Navigator.pop(ctx); _showChangePasswordDialog(ctx); },
           ),
           const SizedBox(height: 10),
-          _SettingOption(
-            icon: Icons.chat_rounded,
-            color: const Color(0xFF25D366),
-            label: 'Change WhatsApp',
-            onTap: () { Navigator.pop(ctx); _showChangeWaDialog(ctx); },
-          ),
-          const SizedBox(height: 10),
-          _SettingOption(
-            icon: Icons.admin_panel_settings_rounded,
-            color: kAmber,
-            label: 'Create Admin',
-            onTap: () {
-              Navigator.pop(ctx);
-              Navigator.push(context, MaterialPageRoute(
-                builder: (_) => AdminAccountsScreen(svc: widget.adminService),
-              ));
-            },
-          ),
-          const SizedBox(height: 10),
+          if (_perms.canEdit(AdminPageKeys.settings)) ...[
+            _SettingOption(
+              icon: Icons.chat_rounded,
+              color: const Color(0xFF25D366),
+              label: 'Change WhatsApp',
+              onTap: () { Navigator.pop(ctx); _showChangeWaDialog(ctx); },
+            ),
+            const SizedBox(height: 10),
+            _SettingOption(
+              icon: Icons.admin_panel_settings_rounded,
+              color: kAmber,
+              label: 'Create Admin',
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => AdminAccountsScreen(svc: widget.adminService),
+                ));
+              },
+            ),
+            const SizedBox(height: 10),
+          ],
           _SettingOption(
             icon: Icons.monitor_heart_rounded,
             color: const Color(0xFF25D366),
@@ -292,12 +325,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
-  void _showChangePinDialog(BuildContext ctx) {
-    final oldPinCtrl = TextEditingController();
-    final newPinCtrl = TextEditingController();
+  // ── Change my own password ────────────────────────────────────────────────
+  //  Replaces the old "Change PIN" dialog. Updates the password on this
+  //  admin's own admin_accounts row via the admin_panel_change_password RPC.
+  void _showChangePasswordDialog(BuildContext ctx) {
+    final oldCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
     final confirmCtrl = TextEditingController();
     bool saving = false;
     String? error;
+
+    final accountId = _perms.accountId;
+    if (accountId == null) return;
 
     showDialog(
       context: ctx,
@@ -306,16 +345,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           backgroundColor: const Color(0xFF16132A),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Row(children: [
-            Icon(Icons.pin_rounded, color: kPurple, size: 20),
+            const Icon(Icons.lock_reset_rounded, color: kPurple, size: 20),
             const SizedBox(width: 8),
-            const Text('Change PIN', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
+            const Text('Change Password', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
           ]),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
-            _pinField(oldPinCtrl, 'Current PIN', onChanged: (_) => setDlg(() {})),
+            _passwordField(oldCtrl, 'Current password', onChanged: (_) => setDlg(() {})),
             const SizedBox(height: 12),
-            _pinField(newPinCtrl, 'New PIN', onChanged: (_) => setDlg(() {})),
+            _passwordField(newCtrl, 'New password (min 6)', onChanged: (_) => setDlg(() {})),
             const SizedBox(height: 12),
-            _pinField(confirmCtrl, 'Confirm New PIN', onChanged: (_) => setDlg(() {})),
+            _passwordField(confirmCtrl, 'Confirm new password', onChanged: (_) => setDlg(() {})),
             if (error != null) ...[
               const SizedBox(height: 8),
               Text(error!, style: const TextStyle(fontSize: 12, color: kRose)),
@@ -327,45 +366,38 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.4))),
             ),
             Builder(builder: (context) {
-              // Nothing to actually save until all three fields have a
-              // full 6-digit PIN entered — button stays muted until then,
-              // matching the same "only enabled when there's something to
-              // save" behavior used elsewhere in the app.
-              final hasInput = oldPinCtrl.text.length == 6 && newPinCtrl.text.length == 6 && confirmCtrl.text.length == 6;
+              final hasInput = oldCtrl.text.isNotEmpty &&
+                  newCtrl.text.length >= 6 &&
+                  confirmCtrl.text.isNotEmpty;
               final enabled = hasInput && !saving;
               return GestureDetector(
-              onTap: !enabled ? null : () async {
-                final op = oldPinCtrl.text.trim();
-                final np = newPinCtrl.text.trim();
-                final cp = confirmCtrl.text.trim();
-                if (op.length != 6) { setDlg(() => error = 'Current PIN must be 6 digits'); return; }
-                if (np.length != 6) { setDlg(() => error = 'New PIN must be 6 digits'); return; }
-                if (np != cp) { setDlg(() => error = 'PINs do not match'); return; }
-                setDlg(() { saving = true; error = null; });
-                try {
-                  const email = 'admin@jorapp.com';
-                  final reauth = await SupabaseService.instance.client.auth.signInWithPassword(
-                    email: email, password: op,
-                  );
-                  if (reauth.user == null) {
-                    setDlg(() { saving = false; error = 'Current PIN is incorrect'; });
+                onTap: !enabled ? null : () async {
+                  if (newCtrl.text.trim() != confirmCtrl.text.trim()) {
+                    setDlg(() => error = 'Passwords do not match');
                     return;
                   }
-                  await SupabaseService.instance.client.auth.updateUser(
-                    UserAttributes(password: np),
+                  setDlg(() { saving = true; error = null; });
+                  final err = await SupabaseService.instance.changeAdminPassword(
+                    id: accountId,
+                    oldPassword: oldCtrl.text,
+                    newPassword: newCtrl.text,
                   );
+                  if (err != null) {
+                    setDlg(() { saving = false; error = err; });
+                    return;
+                  }
                   if (dlgCtx.mounted) Navigator.pop(dlgCtx);
-                } catch (e) {
-                  setDlg(() { saving = false; error = 'Current PIN is incorrect'; });
-                }
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(color: enabled ? kPurple : kPurple.withOpacity(0.35), borderRadius: BorderRadius.circular(8)),
-                child: saving
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : Text('Save', style: TextStyle(color: Colors.white.withOpacity(enabled ? 1 : 0.6), fontWeight: FontWeight.w700, fontSize: 13)),
-              ),
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: enabled ? kPurple : kPurple.withOpacity(0.35),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: saving
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : Text('Save', style: TextStyle(color: Colors.white.withOpacity(enabled ? 1 : 0.6), fontWeight: FontWeight.w700, fontSize: 13)),
+                ),
               );
             }),
           ],
@@ -463,15 +495,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
 
-  Widget _pinField(TextEditingController ctrl, String label, {ValueChanged<String>? onChanged}) {
+  Widget _passwordField(TextEditingController ctrl, String label, {ValueChanged<String>? onChanged}) {
     return TextField(
       controller: ctrl,
       obscureText: true,
-      keyboardType: TextInputType.number,
-      maxLength: 6,
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
       onChanged: onChanged,
-      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 8),
+      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
         labelStyle: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.4)),
@@ -487,24 +516,34 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   @override
   Widget build(BuildContext context) {
     final svc = widget.adminService;
+
+    // Safety net: an admin with no pages assigned gets a clear message
+    // instead of an empty screen.
+    if (_perms.visibleTabs.isEmpty) return _buildNoAccess(svc);
+
     // Force light status bar icons (white) for dark admin background
     if (!kIsWeb) SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Color(0xFF0F0D1A),
       statusBarIconBrightness: Brightness.light,
     ));
+    // Pages this admin has no access to are never built at all.
+    Widget gate(String key, Widget Function() build) =>
+        _perms.canView(key) ? build() : const SizedBox.shrink();
+
     final tabContent = IndexedStack(
       index: _tab,
       children: [
-        _DashboardHome(svc: svc, refreshKey: _refreshKey,
-          affiliateTrashCount: _affiliateTrashCount, affiliateTotalCount: svc.affiliateTotalCount),
-        AdminProposalsScreen(svc: svc),
-        AdminUsersScreen(svc: svc),
-        const AdminPricingScreen(),
-        AdminAffiliateScreen(onRegisterCallback: (cb) => _addAffiliate = cb, onRefreshCallback: (cb) => _refreshAffiliate = cb, onAffiliateDeleted: _loadAffiliateTrashCount),
-        AdminTestimonialsScreen(onRefreshCallback: (cb) => _refreshTestimonials = cb),
-        AdminAdsScreen(onRefreshCallback: (cb) => _refreshAds = cb),
-        AdminVerificationScreen(onRefreshCallback: (cb) => _refreshVerification = cb),
-        const AdminTrackingScreen(),
+        gate(AdminPageKeys.dashboard, () => _DashboardHome(svc: svc, refreshKey: _refreshKey,
+          affiliateTrashCount: _affiliateTrashCount, affiliateTotalCount: svc.affiliateTotalCount)),
+        gate(AdminPageKeys.orders, () => AdminProposalsScreen(svc: svc)),
+        gate(AdminPageKeys.users, () => AdminUsersScreen(svc: svc)),
+        gate(AdminPageKeys.pricing, () => const AdminPricingScreen()),
+        gate(AdminPageKeys.affiliate, () => AdminAffiliateScreen(onRegisterCallback: (cb) => _addAffiliate = cb, onRefreshCallback: (cb) => _refreshAffiliate = cb, onAffiliateDeleted: _loadAffiliateTrashCount)),
+        gate(AdminPageKeys.content, () => AdminTestimonialsScreen(onRefreshCallback: (cb) => _refreshTestimonials = cb)),
+        gate(AdminPageKeys.ads, () => AdminAdsScreen(onRefreshCallback: (cb) => _refreshAds = cb)),
+        gate(AdminPageKeys.verification, () => AdminVerificationScreen(onRefreshCallback: (cb) => _refreshVerification = cb)),
+        gate(AdminPageKeys.tracking, () => const AdminTrackingScreen()),
+        gate(AdminPageKeys.marketing, () => AdminMarketingScreen(key: _marketingKey)),
       ],
     );
 
@@ -539,19 +578,53 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
 
+  // ── No pages assigned ───────────────────────────────────────────────────
+  Widget _buildNoAccess(AdminService svc) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F0D1A),
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.lock_outline_rounded, size: 54, color: Colors.white.withOpacity(0.2)),
+              const SizedBox(height: 16),
+              const Text('No pages assigned',
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              Text(
+                'Your account has no access yet. Ask the main admin to give you access in Settings → Create Admin.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 13, height: 1.5),
+              ),
+              const SizedBox(height: 22),
+              GestureDetector(
+                onTap: () {
+                  svc.logout();
+                  Navigator.pushReplacement(context,
+                      MaterialPageRoute(builder: (_) => AdminLoginScreen(adminService: svc)));
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+                  decoration: BoxDecoration(color: kRose, borderRadius: BorderRadius.circular(10)),
+                  child: const Text('Logout',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
   // ── Web sidebar navigation ──────────────────────────────────────────────
   Widget _buildSidebar(AdminService svc) {
-    const items = [
-      (Icons.dashboard_rounded, 'Dashboard'),
-      (Icons.shopping_cart_rounded, 'Orders'),
-      (Icons.people_rounded, 'Users'),
-      (Icons.attach_money_rounded, 'Pricing'),
-      (Icons.handshake_outlined, 'Affiliate'),
-      (Icons.format_quote_rounded, 'Content'),
-      (Icons.campaign_rounded, 'Ads'),
-      (Icons.admin_panel_settings_rounded, 'Verification'),
-      (Icons.manage_search_rounded, 'Tracking'),
-    ];
+    // Only the tabs this admin may open.
+    final visible = _visibleTabIndexes;
+    final items = visible
+        .map((i) => (kAdminTabPages[i].icon, kAdminTabPages[i].label))
+        .toList();
     return Container(
       width: 210,
       decoration: const BoxDecoration(
@@ -586,7 +659,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             child: ListView.builder(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               itemCount: items.length,
-              itemBuilder: (_, i) {
+              itemBuilder: (_, pos) {
+                final i = visible[pos];
                 final selected = _tab == i;
                 return MouseRegion(
                   cursor: SystemMouseCursors.click,
@@ -596,7 +670,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       if (i == 4) _loadAffiliateTrashCount();
                       if (i == 6) _refreshAds?.call();
                       if (i == 7) _refreshVerification?.call();
-                // Tab 8 (Tracking) — no auto-refresh needed
                       // Tab 8 (Tracking) — no auto-refresh needed
                     },
                     child: AnimatedContainer(
@@ -610,7 +683,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       ),
                       child: Row(children: [
                         Stack(clipBehavior: Clip.none, children: [
-                          Icon(items[i].$1, size: 19,
+                          Icon(items[pos].$1, size: 19,
                             color: selected ? kPurple : Colors.white.withOpacity(0.4)),
                           if (i == 1 && _pendingCount > 0)
                             Positioned(right: -6, top: -4,
@@ -624,7 +697,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                               )),
                         ]),
                         const SizedBox(width: 11),
-                        Text(items[i].$2, style: TextStyle(
+                        Text(items[pos].$2, style: TextStyle(
                           color: selected ? kPurple : Colors.white.withOpacity(0.55),
                           fontSize: 13, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
                       ]),
@@ -696,11 +769,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ),
             SizedBox(width: s.s(8)),
           ],
-          if (_tab == 2) ...[
+          if (_tab == 2 && _canEditTab(2)) ...[
             _EditRequestsHeaderBadge(onReturn: _doRefresh),
             SizedBox(width: s.s(8)),
           ],
-          if (_tab == 1) ...[
+          if (_tab == 1 && _canEditTab(1)) ...[
             GestureDetector(
               onTap: () => _showAddProposalSheet(context, svc, s),
               child: Container(
@@ -711,7 +784,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ),
             SizedBox(width: s.s(8)),
           ],
-          if (_tab == 1 || _tab == 2) ...[
+          if ((_tab == 1 || _tab == 2) && _canEditTab(_tab)) ...[
             GestureDetector(
               onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AdminTrashScreen(svc: svc, source: _tab == 1 ? 'orders' : 'users'))),
               child: Container(
@@ -743,19 +816,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
             ),
             SizedBox(width: s.s(8)),
-            GestureDetector(
-              onTap: () => _addAffiliate?.call(),
-              child: Container(width: s.d(36), height: s.d(36), decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
-                child: Icon(Icons.person_add_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
-            ),
-            SizedBox(width: s.s(8)),
-            GestureDetector(
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AdminTrashScreen(svc: svc, source: 'affiliates')))
-                .then((_) { _refreshAffiliate?.call(); _loadAffiliateTrashCount(); }),
-              child: Container(width: s.d(36), height: s.d(36), decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
-                child: Icon(Icons.delete_outline_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
-            ),
-            SizedBox(width: s.s(8)),
+            if (_canEditTab(4)) ...[
+              GestureDetector(
+                onTap: () => _addAffiliate?.call(),
+                child: Container(width: s.d(36), height: s.d(36), decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                  child: Icon(Icons.person_add_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
+              ),
+              SizedBox(width: s.s(8)),
+              GestureDetector(
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AdminTrashScreen(svc: svc, source: 'affiliates')))
+                  .then((_) { _refreshAffiliate?.call(); _loadAffiliateTrashCount(); }),
+                child: Container(width: s.d(36), height: s.d(36), decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                  child: Icon(Icons.delete_outline_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
+              ),
+              SizedBox(width: s.s(8)),
+            ],
           ],
           if (_tab == 5) ...[
             GestureDetector(
@@ -781,6 +856,43 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             // Tracking tab — no refresh action needed (search is manual)
             SizedBox(width: s.s(8)),
           ],
+          if (_tab == 9) ...[
+            GestureDetector(
+              onTap: () => _marketingKey.currentState?.refresh(),
+              child: Container(
+                width: s.d(36), height: s.d(36),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18)),
+              ),
+            ),
+            SizedBox(width: s.s(8)),
+            if (_canEditTab(9)) GestureDetector(
+              onTap: () => _marketingKey.currentState?.openTrash(),
+              child: Container(
+                width: s.d(36), height: s.d(36),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                child: Icon(Icons.delete_outline_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18)),
+              ),
+            ),
+            if (_canEditTab(9)) SizedBox(width: s.s(8)),
+            if (_canEditTab(9)) GestureDetector(
+              onTap: () => _marketingKey.currentState?.showImportExportMenu(context),
+              child: Container(
+                width: s.d(36), height: s.d(36),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                child: Center(
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.arrow_upward_rounded, color: Colors.white.withOpacity(0.5), size: s.d(14)),
+                    Transform.translate(
+                      offset: Offset(-s.d(4), 0),
+                      child: Icon(Icons.arrow_downward_rounded, color: Colors.white.withOpacity(0.5), size: s.d(14)),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+            SizedBox(width: s.s(8)),
+          ],
           if (_tab == 7) ...[
             GestureDetector(
               onTap: () => _refreshVerification?.call(),
@@ -791,7 +903,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ),
             SizedBox(width: s.s(8)),
           ],
-          if (_tab == 0) ...[
+          if (_tab == _perms.firstVisibleTabIndex && _perms.canView(AdminPageKeys.settings)) ...[
             GestureDetector(
               onTap: () => _showSettingsDialog(context, svc),
               child: Container(width: s.d(36), height: s.d(36), decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
@@ -800,7 +912,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             SizedBox(width: s.s(8)),
           ],
           // ✨ Notification Bell Widget (dashboard tab only)
-          if (_tab == 0) ...[GestureDetector(
+          if (_tab == _perms.firstVisibleTabIndex) ...[GestureDetector(
             onTap: () async {
               await Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminNotificationScreen()));
               _refreshUnreadNotifCount();
@@ -878,17 +990,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   Widget _buildBottomNav() {
-    final items = [
-      (Icons.dashboard_rounded, 'Dashboard'),
-      (Icons.shopping_cart_rounded, 'Orders'),
-      (Icons.people_rounded, 'Users'),
-      (Icons.attach_money_rounded, 'Pricing'),
-      (Icons.handshake_outlined, 'Affiliate'),
-      (Icons.format_quote_rounded, 'Content'),
-      (Icons.campaign_rounded, 'Ads'),
-      (Icons.admin_panel_settings_rounded, 'Verify'),
-      (Icons.manage_search_rounded, 'Track'),
-    ];
+    // Only the tabs this admin may open.
+    final visible = _visibleTabIndexes;
+    final items = visible.map((i) {
+      final page = kAdminTabPages[i];
+      return (page.icon, kAdminTabShortLabels[page.key] ?? page.label);
+    }).toList();
     final s = _S.of(context);
     // Each tab item is fixed width so the bar scrolls horizontally when
     // there are more tabs than fit on screen — same pattern used by
@@ -904,7 +1011,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         scrollDirection: Axis.horizontal,
         child: Row(
           children: items.asMap().entries.map((e) {
-            final i = e.key;
+            final i = visible[e.key];
             final item = e.value;
             final selected = _tab == i;
             return GestureDetector(
@@ -1017,6 +1124,7 @@ class _DashboardHome extends StatelessWidget {
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   void _confirmResetStats(BuildContext context, AdminService svc, _S s) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.dashboard, what: 'resetting stats')) return;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1059,6 +1167,7 @@ class _DashboardHome extends StatelessWidget {
   /// A simple list of every completed month's frozen revenue — no picker,
   /// no range to get wrong, just "here's what each past month made."
   Future<void> _addToCurrentMonthRevenue(BuildContext context) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.dashboard, what: 'editing revenue')) return;
     final amountCtrl = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1153,6 +1262,7 @@ class _DashboardHome extends StatelessWidget {
                         final revenueCtrl = TextEditingController(text: revenue.toInt().toString());
                         return GestureDetector(
                           onTap: () async {
+                                if (!AdminPerms.i.guardEdit(AdminPageKeys.dashboard, what: 'editing revenue')) return;
                                 revenueCtrl.text = revenue.toInt().toString();
                                 final confirmed = await showDialog<bool>(
                                   context: context,
@@ -1248,6 +1358,7 @@ class _DashboardHome extends StatelessWidget {
                 Expanded(
                   child: GestureDetector(
                     onTap: () async {
+                      if (!AdminPerms.i.guardEdit(AdminPageKeys.dashboard, what: 'clearing revenue history')) return;
                       final confirmed = await showDialog<bool>(
                         context: ctx,
                         builder: (_) => AlertDialog(
