@@ -151,6 +151,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     if (_filter == 'AI' && _aiSort == 'Permitted') list = list.where((u) => u.registrationAllowed).toList();
     if (_filter == 'AI' && _aiSort == 'Not Permitted') list = list.where((u) => !u.registrationAllowed).toList();
     if (_filter == 'Refunded') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.refunded).toList();
+    if (_filter == 'Online') list = list.where((u) => u.lastSeenAt != null && DateTime.now().difference(u.lastSeenAt!).inMinutes < 6).toList();
     final now = DateTime.now();
     if (_dateFrom != null && _dateTo != null) {
       list = list.where((u) => !u.postedAt.isBefore(_dateFrom!) && !u.postedAt.isAfter(_dateTo!.add(const Duration(days: 1)))).toList();
@@ -384,7 +385,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 
   Widget _buildFilterRow() {
     final s = _S.of(context);
-    final filters = ['All', 'AI', 'Active', 'Inactive', 'Refunded', 'Paused', 'Featured'];
+    final filters = ['All', 'AI', 'Active', 'Inactive', 'Refunded', 'Paused', 'Featured', 'Online'];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -556,69 +557,13 @@ class _UserCardState extends State<_UserCard> {
                       Row(
                         children: [
                           Text(
-                            (user.cnic != null && user.cnic!.isNotEmpty)
-                                ? formatCnicDisplay(user.cnic!)
-                                : (user.adminNotes == 'AI_IMPORTED' && user.proposalNumber != null)
-                                    ? '#${user.proposalNumber}'
-                                    : 'CNIC not set',
-                            style: TextStyle(fontSize: s.f(11), fontWeight: FontWeight.w500,
-                              color: (user.cnic != null && user.cnic!.isNotEmpty) ? Colors.white.withOpacity(0.45) : Colors.white.withOpacity(0.35)),
+                            user.proposalNumber != null ? '#${user.proposalNumber}' : '—',
+                            style: TextStyle(fontSize: s.f(11), fontWeight: FontWeight.w600,
+                              color: Colors.white.withOpacity(0.45)),
                           ),
-                          // Registration allowed checkbox inline — only for AI imported profiles
-                          if (user.adminNotes == 'AI_IMPORTED') ...[
-                            SizedBox(width: s.s(8)),
-                            GestureDetector(
-                              onTap: () async {
-                                if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'changing permission status')) return;
-                                final newVal = !_allowed;
-                          final confirmed = await showDialog<bool>(
-                            context: context,
-                            builder: (_) => AlertDialog(
-                              backgroundColor: const Color(0xFF1E1A35),
-                              title: Text(
-                                newVal ? 'Mark as Permitted?' : 'Mark as Not Permitted?',
-                                style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800),
-                              ),
-                              content: Text(
-                                newVal
-                                    ? 'Mark that this person has given you permission to create their profile.'
-                                    : 'Mark that this person has NOT given you permission to create their profile.',
-                                style: const TextStyle(color: Colors.white54, fontSize: 13),
-                              ),
-                              actions: [
-                                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, true),
-                                  child: Text('Confirm', style: TextStyle(color: newVal ? kGreen : kRose, fontWeight: FontWeight.w800)),
-                                ),
-                              ],
-                            ),
-                          );
-                          if (confirmed != true) return;
-                          setState(() => _allowed = newVal);
-                          await SupabaseService.instance.client.from('proposals').update({'registration_allowed': newVal}).eq('id', user.id);
-                          svc.loadData();
-                        },
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _allowed ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
-                              size: s.d(14),
-                              color: _allowed ? kGreen : Colors.white.withOpacity(0.3),
-                            ),
-                            SizedBox(width: s.s(4)),
-                            Text(
-                              _allowed ? 'Permission' : 'Permission',
-                              style: TextStyle(
-                                fontSize: s.f(10),
-                                fontWeight: FontWeight.w600,
-                                color: _allowed ? kGreen : Colors.white.withOpacity(0.3),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                          if (user.lastSeenAt != null) ...[
+                            Text('  •  ', style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.25))),
+                            _LastSeenText(lastSeen: user.lastSeenAt!, source: user.lastSeenSource),
                           ],
                         ],
                       ),
@@ -1281,6 +1226,36 @@ class _Avatar extends StatelessWidget {
       ),
     );
   }
+}
+
+// Returns a simple Text widget showing online status based on last_seen_at
+Widget _lastSeenLabel(DateTime lastSeen, dynamic s) {
+  final diff = DateTime.now().difference(lastSeen);
+  final online = diff.inMinutes < 6;
+  String label;
+  if (online)             label = 'Online now';
+  else if (diff.inMinutes < 60) label = '${diff.inMinutes}m ago';
+  else if (diff.inHours   < 24) label = '${diff.inHours}h ago';
+  else if (diff.inDays    < 30) label = '${diff.inDays}d ago';
+  else                          label = '${(diff.inDays / 30).floor()}mo ago';
+  return Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 6, height: 6,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: online ? kGreen : Colors.white.withOpacity(0.25),
+        ),
+      ),
+      SizedBox(width: s.s(4)),
+      Text(label, style: TextStyle(
+        fontSize: s.f(10.5),
+        fontWeight: online ? FontWeight.w700 : FontWeight.w500,
+        color: online ? kGreen : Colors.white.withOpacity(0.35),
+      )),
+    ],
+  );
 }
 
 class _InfoChip extends StatelessWidget {
@@ -2580,6 +2555,50 @@ class _BoostListItemState extends State<_BoostListItem> {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _LastSeenText extends StatelessWidget {
+  final DateTime lastSeen;
+  final String? source;
+  const _LastSeenText({required this.lastSeen, this.source});
+
+  String _label() {
+    final diff = DateTime.now().difference(lastSeen);
+    final src = source == 'web' ? '(Web)' : source == 'app' ? '(App)' : '';
+    final suffix = src.isNotEmpty ? ' $src' : '';
+    if (diff.inMinutes < 6)  return 'Online$suffix';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago$suffix';
+    if (diff.inHours   < 24) return '${diff.inHours}h ago$suffix';
+    if (diff.inDays    < 30) return '${diff.inDays}d ago$suffix';
+    return '${(diff.inDays / 30).floor()}mo ago$suffix';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = _S.of(context);
+    final online = DateTime.now().difference(lastSeen).inMinutes < 6;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 6, height: 6,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: online ? kGreen : Colors.white.withOpacity(0.25),
+          ),
+        ),
+        SizedBox(width: s.s(4)),
+        Text(
+          _label(),
+          style: TextStyle(
+            fontSize: s.f(10.5),
+            fontWeight: online ? FontWeight.w700 : FontWeight.w500,
+            color: online ? kGreen : Colors.white.withOpacity(0.35),
+          ),
+        ),
+      ],
     );
   }
 }

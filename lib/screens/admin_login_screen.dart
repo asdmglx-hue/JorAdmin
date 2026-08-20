@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../services/fcm_service.dart';
@@ -88,6 +89,16 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     _shakeAnim = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(parent: _shakeCtrl, curve: Curves.elasticIn),
     );
+    _loadSavedCnic();
+  }
+
+  Future<void> _loadSavedCnic() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('admin_cnic') ?? '';
+    if (saved.isNotEmpty && mounted) {
+      setState(() => _cnicCtrl.text = saved);
+      _passFocus.requestFocus();
+    }
   }
 
   @override
@@ -114,6 +125,8 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
 
     if (result == null) {
       if (!kIsWeb) await FCMService.instance.saveAdminToken();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('admin_cnic', _cnicCtrl.text);
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
@@ -261,12 +274,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
         child: Center(
           child: _cnicDigits == 0
               ? const SizedBox.shrink()
-              : _cnicDigits == 13
-                  ? Icon(Icons.check_circle_rounded, size: s.d(17), color: kGreen)
-                  : Text('$_cnicDigits/13',
-                      style: TextStyle(
-                          fontSize: s.f(11.5),
-                          color: Colors.white.withOpacity(0.4))),
+              : Text('$_cnicDigits/13',
+                    style: TextStyle(
+                        fontSize: s.f(11.5),
+                        color: Colors.white.withOpacity(0.4))),
         ),
       ),
     ]);

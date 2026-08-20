@@ -275,13 +275,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           ],
         ]),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
-          _SettingOption(
-            icon: Icons.lock_reset_rounded,
-            color: kPurple,
-            label: 'Change My Password',
-            onTap: () { Navigator.pop(ctx); _showChangePasswordDialog(ctx); },
-          ),
-          const SizedBox(height: 10),
           if (_perms.canEdit(AdminPageKeys.settings)) ...[
             _SettingOption(
               icon: Icons.chat_rounded,
@@ -293,7 +286,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             _SettingOption(
               icon: Icons.admin_panel_settings_rounded,
               color: kAmber,
-              label: 'Create Admin',
+              label: 'Manage Admin',
               onTap: () {
                 Navigator.pop(ctx);
                 Navigator.push(context, MaterialPageRoute(
@@ -565,14 +558,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F0D1A),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildHeader(svc),
-            Expanded(child: tabContent),
-            _buildBottomNav(),
-          ],
-        ),
+      body: Column(
+        children: [
+          SafeArea(
+            bottom: false,
+            child: _buildHeader(svc),
+          ),
+          Expanded(child: tabContent),
+          _buildBottomNav(),
+        ],
       ),
     );
   }
@@ -716,17 +710,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 child: MouseRegion(
                   cursor: SystemMouseCursors.click,
                   child: GestureDetector(
-                    onTap: () => svc.loadData(),
+                    onTap: _doRefresh,
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.04),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        Icon(Icons.refresh_rounded, color: Color(0x66FFFFFF), size: 16),
-                        SizedBox(width: 6),
-                        Text('Refresh', style: TextStyle(color: Color(0x66FFFFFF), fontSize: 11.5)),
+                      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        RotationTransition(
+                          turns: _spinCtrl,
+                          child: Icon(Icons.refresh_rounded, color: _refreshing ? Colors.white.withOpacity(0.9) : const Color(0x66FFFFFF), size: 16),
+                        ),
+                        const SizedBox(width: 6),
+                        Text('Refresh', style: TextStyle(color: _refreshing ? Colors.white.withOpacity(0.9) : const Color(0x66FFFFFF), fontSize: 11.5)),
                       ]),
                     ),
                   ),
@@ -810,10 +807,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             SizedBox(width: s.s(8)),
           ],
           if (_tab == 4) ...[
-            GestureDetector(
-              onTap: () => _refreshAffiliate?.call(),
-              child: Container(width: s.d(36), height: s.d(36), decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
-                child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
+            RotationTransition(
+              turns: _spinCtrl,
+              child: GestureDetector(
+                onTap: () { _refreshAffiliate?.call(); _doRefresh(); },
+                child: Container(width: s.d(36), height: s.d(36), decoration: BoxDecoration(color: _refreshing ? Colors.white.withOpacity(0.12) : Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                  child: Icon(Icons.refresh_rounded, color: _refreshing ? Colors.white.withOpacity(0.9) : Colors.white.withOpacity(0.5), size: s.d(18))),
+              ),
             ),
             SizedBox(width: s.s(8)),
             if (_canEditTab(4)) ...[
@@ -833,22 +833,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ],
           ],
           if (_tab == 5) ...[
-            GestureDetector(
-              onTap: () => _refreshTestimonials?.call(),
-              child: Container(
-                width: s.d(36), height: s.d(36),
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
-                child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
+            RotationTransition(
+              turns: _spinCtrl,
+              child: GestureDetector(
+                onTap: () { _refreshTestimonials?.call(); _doRefresh(); },
+                child: Container(
+                  width: s.d(36), height: s.d(36),
+                  decoration: BoxDecoration(color: _refreshing ? Colors.white.withOpacity(0.12) : Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                  child: Icon(Icons.refresh_rounded, color: _refreshing ? Colors.white.withOpacity(0.9) : Colors.white.withOpacity(0.5), size: s.d(18))),
+              ),
             ),
             SizedBox(width: s.s(8)),
           ],
           if (_tab == 6) ...[
-            GestureDetector(
-              onTap: () => _refreshAds?.call(),
-              child: Container(
-                width: s.d(36), height: s.d(36),
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
-                child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
+            RotationTransition(
+              turns: _spinCtrl,
+              child: GestureDetector(
+                onTap: () { _refreshAds?.call(); _doRefresh(); },
+                child: Container(
+                  width: s.d(36), height: s.d(36),
+                  decoration: BoxDecoration(color: _refreshing ? Colors.white.withOpacity(0.12) : Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                  child: Icon(Icons.refresh_rounded, color: _refreshing ? Colors.white.withOpacity(0.9) : Colors.white.withOpacity(0.5), size: s.d(18))),
+              ),
             ),
             SizedBox(width: s.s(8)),
           ],
@@ -857,12 +863,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             SizedBox(width: s.s(8)),
           ],
           if (_tab == 9) ...[
-            GestureDetector(
-              onTap: () => _marketingKey.currentState?.refresh(),
-              child: Container(
-                width: s.d(36), height: s.d(36),
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
-                child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18)),
+            RotationTransition(
+              turns: _spinCtrl,
+              child: GestureDetector(
+                onTap: () { _marketingKey.currentState?.refresh(); _doRefresh(); },
+                child: Container(
+                  width: s.d(36), height: s.d(36),
+                  decoration: BoxDecoration(color: _refreshing ? Colors.white.withOpacity(0.12) : Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                  child: Icon(Icons.refresh_rounded, color: _refreshing ? Colors.white.withOpacity(0.9) : Colors.white.withOpacity(0.5), size: s.d(18)),
+                ),
               ),
             ),
             SizedBox(width: s.s(8)),
@@ -894,12 +903,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             SizedBox(width: s.s(8)),
           ],
           if (_tab == 7) ...[
-            GestureDetector(
-              onTap: () => _refreshVerification?.call(),
-              child: Container(
-                width: s.d(36), height: s.d(36),
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
-                child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18))),
+            RotationTransition(
+              turns: _spinCtrl,
+              child: GestureDetector(
+                onTap: () { _refreshVerification?.call(); _doRefresh(); },
+                child: Container(
+                  width: s.d(36), height: s.d(36),
+                  decoration: BoxDecoration(color: _refreshing ? Colors.white.withOpacity(0.12) : Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(10))),
+                  child: Icon(Icons.refresh_rounded, color: _refreshing ? Colors.white.withOpacity(0.9) : Colors.white.withOpacity(0.5), size: s.d(18))),
+              ),
             ),
             SizedBox(width: s.s(8)),
           ],
@@ -1002,15 +1014,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     // YouTube, Instagram, and other apps with many nav items.
     const double itemWidth = 72;
     return Container(
-      height: s.d(64),
       decoration: BoxDecoration(
         color: const Color(0xFF16132A),
         border: Border(top: BorderSide(color: Colors.white.withOpacity(0.07))),
       ),
-      child: SingleChildScrollView(
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: s.d(64),
+          child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
-        child: Row(
-          children: items.asMap().entries.map((e) {
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minWidth: MediaQuery.of(context).size.width),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: items.asMap().entries.map((e) {
             final i = visible[e.key];
             final item = e.value;
             final selected = _tab == i;
@@ -1068,9 +1086,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               ),
             );
           }).toList(),
-        ),
-      ),
-    );
+          ),   // Row
+        ),     // ConstrainedBox
+        ),     // SingleChildScrollView
+        ),     // SizedBox
+      ),       // SafeArea
+    );         // Container
   }
 }
 
@@ -1752,16 +1773,17 @@ class _StatusBreakdown extends StatelessWidget {
         SizedBox(height: sc.s(14)),
         FutureBuilder<List<int>>(
           future: Future.wait([
-            // Edit requests: count distinct proposals with at least one 'applied' field
             SupabaseService.instance.client.from('profile_edit_requests').select('proposal_id').eq('status', 'applied')
                 .then((r) => (r as List).map((e) => e['proposal_id']).toSet().length),
             SupabaseService.instance.client.from('profile_reports').select('id').eq('status', 'pending').then((r) => (r as List).length),
-            SupabaseService.instance.client.from('cnic_verification_requests').select('id').eq('status', 'pending').then((r) => (r as List).length),
+            SupabaseService.instance.client.from('proposals').select('id')
+                .gte('last_seen_at', DateTime.now().subtract(const Duration(minutes: 6)).toUtc().toIso8601String())
+                .then((r) => (r as List).length),
             SupabaseService.instance.client.from('admin_accounts').select('id').then((r) => (r as List).length),
           ]),
           builder: (_, snap) {
             final d = snap.data ?? [0, 0, 0, 0];
-            return Row(children: [cell('Review', d[0]), cell('Report', d[1]), cell('Verify', d[2]), cell('Admins', d[3])]);
+            return Row(children: [cell('Review', d[0]), cell('Report', d[1]), cell('Online', d[2]), cell('Admins', d[3])]);
           },
         ),
       ]),

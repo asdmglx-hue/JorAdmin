@@ -36,7 +36,7 @@ const String _adminUserCols = 'id,proposal_number,name,age,gender,city,country,c
     'institute_2,degree_title_2,degree_certificate_2_url,'
     'institute_3,degree_title_3,degree_certificate_3_url,profession,employment_type,salary_start,'
     'salary_end,height_inches,weight_kg,complexion,marital_status,'
-    'open_to_polygamy,marriage_number,boys,girls,practice_level,hijab,beard,'
+    'marriage_number,boys,girls,practice_level,hijab,beard,'
     'family_type,father_alive,mother_alive,father_occupation,mother_occupation,'
     'sisters,brothers,home_type,house_size,location,disability_details,'
     'has_kids,has_siblings,has_car,car_name,has_other_property,other_property,'
@@ -49,7 +49,7 @@ const String _adminUserCols = 'id,proposal_number,name,age,gender,city,country,c
     'deletion_reason,admin_notes,discarded,suggested_info,profile_photo_url,'
     'cnic_front_url,cnic_back_url,guardian_cnic_front_url,guardian_cnic_back_url,'
     'education_document_url,applied_coupon_code,profession_category,registration_allowed,'
-    'submission_source';
+    'submission_source,last_seen_at,last_seen_source';
 
 extension AdminSupabaseExtension on SupabaseService {
   Future<List<AdminUser>> fetchAdminUsers() async {

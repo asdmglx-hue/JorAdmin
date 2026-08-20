@@ -231,7 +231,7 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
               GestureDetector(
                 onTap: _doRefresh,
                 child: Container(
-                  margin: EdgeInsets.only(right: allDeleted.isNotEmpty ? s.s(8) : s.s(16)),
+                  margin: EdgeInsets.only(right: s.s(8)),
                   padding: EdgeInsets.all(s.s(6)),
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(0.06),
@@ -242,20 +242,25 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
                       : Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18)),
                 ),
               ),
-              if (allDeleted.isNotEmpty)
-                GestureDetector(
-                  onTap: () => _confirmDeleteAll(context, () => _deleteAllUsers(context, allDeleted), allDeleted.length),
-                  child: Container(
-                    margin: EdgeInsets.only(right: s.s(16)),
-                    padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(6)),
-                    decoration: BoxDecoration(
-                      color: kRose.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(s.s(8)),
-                      border: Border.all(color: kRose.withOpacity(0.3)),
-                    ),
-                    child: Text('Delete All', style: TextStyle(color: kRose, fontSize: s.f(12), fontWeight: FontWeight.w700)),
+              GestureDetector(
+                onTap: allDeleted.isNotEmpty
+                    ? () => _confirmDeleteAll(context, () => _deleteAllUsers(context, allDeleted), allDeleted.length)
+                    : null,
+                child: Container(
+                  margin: EdgeInsets.only(right: s.s(16)),
+                  padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(6)),
+                  decoration: BoxDecoration(
+                    color: allDeleted.isNotEmpty ? kRose.withOpacity(0.12) : Colors.white.withOpacity(0.04),
+                    borderRadius: BorderRadius.circular(s.s(8)),
+                    border: Border.all(color: allDeleted.isNotEmpty ? kRose.withOpacity(0.3) : Colors.white.withOpacity(0.1)),
                   ),
+                  child: Text('Delete All', style: TextStyle(
+                    color: allDeleted.isNotEmpty ? kRose : Colors.white.withOpacity(0.25),
+                    fontSize: s.f(12),
+                    fontWeight: FontWeight.w700,
+                  )),
                 ),
+              ),
             ],
             bottom: PreferredSize(
               preferredSize: const Size.fromHeight(1),
@@ -342,7 +347,7 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
           GestureDetector(
             onTap: _doRefresh,
             child: Container(
-              margin: EdgeInsets.only(right: _deletedAffiliates.isNotEmpty ? s.s(8) : s.s(16)),
+              margin: EdgeInsets.only(right: s.s(8)),
               padding: EdgeInsets.all(s.s(6)),
               decoration: BoxDecoration(
                 color: Colors.white.withOpacity(0.06),
@@ -353,20 +358,25 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
                   : Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18)),
             ),
           ),
-          if (_deletedAffiliates.isNotEmpty)
-            GestureDetector(
-              onTap: () => _confirmDeleteAll(context, _deleteAllAffiliates, _deletedAffiliates.length),
-              child: Container(
-                margin: EdgeInsets.only(right: s.s(16)),
-                padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(6)),
-                decoration: BoxDecoration(
-                  color: kRose.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(s.s(8)),
-                  border: Border.all(color: kRose.withOpacity(0.3)),
-                ),
-                child: Text('Delete All', style: TextStyle(color: kRose, fontSize: s.f(12), fontWeight: FontWeight.w700)),
+          GestureDetector(
+            onTap: _deletedAffiliates.isNotEmpty
+                ? () => _confirmDeleteAll(context, _deleteAllAffiliates, _deletedAffiliates.length)
+                : null,
+            child: Container(
+              margin: EdgeInsets.only(right: s.s(16)),
+              padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(6)),
+              decoration: BoxDecoration(
+                color: _deletedAffiliates.isNotEmpty ? kRose.withOpacity(0.12) : Colors.white.withOpacity(0.04),
+                borderRadius: BorderRadius.circular(s.s(8)),
+                border: Border.all(color: _deletedAffiliates.isNotEmpty ? kRose.withOpacity(0.3) : Colors.white.withOpacity(0.1)),
               ),
+              child: Text('Delete All', style: TextStyle(
+                color: _deletedAffiliates.isNotEmpty ? kRose : Colors.white.withOpacity(0.25),
+                fontSize: s.f(12),
+                fontWeight: FontWeight.w700,
+              )),
             ),
+          ),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),

@@ -259,11 +259,18 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
       final data = await _supabase
           .from('profile_reports')
           .select('*, proposals(name, city, proposal_number)')
+          .eq('status', 'pending')
           .order('created_at', ascending: false)
           .limit(500);
-      final reports = (data as List)
+      debugPrint('[_loadReports] raw rows=${(data as List).length}');
+      for (final row in data as List) {
+        final r = row as Map<String, dynamic>;
+        debugPrint('[_loadReports] id=${r['id']}  status=${r['status']}  reason=${r['reason']}');
+      }
+      final reports = (data)
           .map((row) => ProfileReport.fromJson(row as Map<String, dynamic>))
           .toList();
+      debugPrint('[_loadReports] parsed reports=${reports.length}');
       if (mounted) setState(() { _reports = reports; _reportsLoading = false; });
     } catch (_) {
       if (mounted) setState(() => _reportsLoading = false);
@@ -290,6 +297,75 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
     }
   }
 
+  Future<void> _confirmClearAll() async {
+    final isReports = _selectedTab == 1;
+    final label = isReports ? 'Reported Profiles' : 'Review Changes';
+    final count = isReports
+        ? _reports.where((r) => r.status == 'pending').length
+        : _requests.length;
+    if (count == 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1A35),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Clear All $label?',
+            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+        content: Text(
+          isReports
+            ? 'All $count pending reports will be dismissed and removed from this list.'
+            : 'All $count pending review requests will be dismissed and removed from this list.',
+          style: const TextStyle(color: Colors.white54, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear All', style: TextStyle(color: _kRose, fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    debugPrint('[ClearAll] confirmed  isReports=$isReports  count=$count');
+
+    try {
+      if (isReports) {
+        debugPrint('[ClearAll] REPORTS: updating status->dismissed where status=pending');
+        final res = await _supabase
+            .from('profile_reports')
+            .update({'status': 'dismissed'})
+            .eq('status', 'pending')
+            .select('id');
+        debugPrint('[ClearAll] REPORTS: rows affected=${(res as List).length}  ids=${res.map((r) => r['id']).toList()}');
+        if (mounted) setState(() => _reports = _reports.where((r) => r.status != 'pending').toList());
+        debugPrint('[ClearAll] REPORTS: local list after filter=${_reports.length}');
+      } else {
+        final allProposalIds = _requests.map((r) => r.proposalId).toList();
+        debugPrint('[ClearAll] REVIEW: allProposalIds(${allProposalIds.length})=$allProposalIds');
+        if (allProposalIds.isNotEmpty) {
+          final res = await _supabase
+              .from('profile_edit_requests')
+              .delete()
+              .inFilter('proposal_id', allProposalIds)
+              .select('id, proposal_id, status');
+          debugPrint('[ClearAll] REVIEW: rows deleted=\${(res as List).length}  detail=\$res');
+        } else {
+          debugPrint('[ClearAll] REVIEW: no proposal IDs — nothing to delete');
+        }
+        if (mounted) setState(() => _requests = []);
+        debugPrint('[ClearAll] REVIEW: local _requests cleared');
+      }
+    } catch (e, st) {
+      debugPrint('[ClearAll] ERROR: $e\n$st');
+    }
+  }
+
   List<EditRequest> get _filtered {
     if (_search.isEmpty) return _requests;
     final q = _search.toLowerCase();
@@ -302,10 +378,11 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
   }
 
   List<ProfileReport> get _filteredReports {
-    if (_search.isEmpty) return _reports;
+    final pending = _reports.where((r) => r.status == 'pending').toList();
+    if (_search.isEmpty) return pending;
     final q = _search.toLowerCase();
     final numSearch = _search.startsWith('#') ? int.tryParse(_search.substring(1)) : null;
-    return _reports.where((r) =>
+    return pending.where((r) =>
       r.proposalName.toLowerCase().contains(q) ||
       r.reason.toLowerCase().contains(q) ||
       (numSearch != null && r.proposalNumber == numSearch)
@@ -330,9 +407,15 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
           .order('submitted_at', ascending: true)
           .limit(1000);
 
+      debugPrint('[_load] raw rows fetched=${(data as List).length}');
+      for (final row in data as List) {
+        final r = row as Map<String, dynamic>;
+        debugPrint('[_load] row id=${r['id']}  proposal_id=${r['proposal_id']}  status=${r['status']}  submitted_at=${r['submitted_at']}');
+      }
+
       final Map<String, List<Map<String, dynamic>>> byProposal = {};
       final Map<String, Map<String, dynamic>> metaByProposal = {};
-      for (final row in data as List) {
+      for (final row in data) {
         final r = row as Map<String, dynamic>;
         final pid = r['proposal_id'] as String;
         byProposal.putIfAbsent(pid, () => []).add(r);
@@ -346,6 +429,7 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
       )).toList()
         ..sort((a, b) => b.latestEventAt.compareTo(a.latestEventAt));
 
+      debugPrint('[_load] built EditRequests=${built.length}  hasPending counts=${built.where((r) => r.hasPending).length}');
       if (mounted) setState(() { _requests = built; _loading = false; });
     } catch (e) {
       if (mounted) setState(() => _loading = false);
@@ -506,16 +590,52 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
       appBar: AppBar(
         backgroundColor: _kCard,
         elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+        actionsIconTheme: const IconThemeData(color: Colors.white70),
         title: Text(_selectedTab == 0 ? 'Review Changes' : _selectedTab == 1 ? 'Reported Profiles' : 'CNIC Verification', style: TextStyle(color: Colors.white, fontSize: s.f(17), fontWeight: FontWeight.w800)),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          icon: const Icon(Icons.arrow_back_rounded),
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
-            onPressed: _selectedTab == 0 ? _load : _loadReports,
+          GestureDetector(
+            onTap: _selectedTab == 0 ? _load : _loadReports,
+            child: Container(
+              margin: EdgeInsets.only(right: (_selectedTab == 0 || _selectedTab == 1) ? s.s(8) : s.s(16)),
+              padding: EdgeInsets.all(s.s(6)),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(s.s(8)),
+              ),
+              child: Icon(Icons.refresh_rounded, color: Colors.white.withOpacity(0.5), size: s.d(18)),
+            ),
           ),
+          if (_selectedTab == 0 || _selectedTab == 1)
+            Builder(builder: (_) {
+              final hasItems = _selectedTab == 0
+                  ? _requests.isNotEmpty
+                  : _reports.where((r) => r.status == 'pending').isNotEmpty;
+              return GestureDetector(
+                onTap: hasItems ? () {
+                  debugPrint('[UI] Clear All tapped  _selectedTab=$_selectedTab');
+                  _confirmClearAll();
+                } : null,
+                child: Container(
+                  margin: EdgeInsets.only(right: s.s(16)),
+                  padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(6)),
+                  decoration: BoxDecoration(
+                    color: hasItems ? _kRose.withOpacity(0.12) : Colors.white.withOpacity(0.04),
+                    borderRadius: BorderRadius.circular(s.s(8)),
+                    border: Border.all(color: hasItems ? _kRose.withOpacity(0.3) : Colors.white.withOpacity(0.1)),
+                  ),
+                  child: Text('Clear All', style: TextStyle(
+                    color: hasItems ? _kRose : Colors.white.withOpacity(0.25),
+                    fontSize: s.f(12),
+                    fontWeight: FontWeight.w700,
+                  )),
+                ),
+              );
+            }),
         ],
         bottom: PreferredSize(
           preferredSize: Size.fromHeight(s.d(104)),
@@ -963,7 +1083,7 @@ String _fieldLabel(String key) {
     'degree_title_3': 'Degree 3', 'institute_3': 'Institute 3',
     'marital_status': 'Marital Status', 'marriage_number': 'Looking For (Marriage)',
     'has_kids': 'Has Kids', 'boys': 'Sons', 'girls': 'Daughters',
-    'open_to_polygamy': 'Open to Polygamy', 'family_type': 'Family Type', 'complexion': 'Complexion',
+    'family_type': 'Family Type', 'complexion': 'Complexion',
     'practice_level': 'Religion Practice Level', 'caste': 'Caste', 'sect': 'Sect / Maslak',
     'hijab': 'Wears Hijab', 'beard': 'Has Beard', 'languages': 'Native Language',
     'height_inches': 'Height', 'weight_kg': 'Weight',
@@ -994,7 +1114,7 @@ const _kFieldOrder = <String>[
   // Basic Information
   'name', 'age', 'city', 'country', 'weight_kg', 'height_inches', 'complexion',
   'marital_status', 'marriage_number', 'has_kids', 'boys', 'girls',
-  'open_to_polygamy', 'caste', 'sect', 'practice_level', 'hijab', 'beard',
+  'caste', 'sect', 'practice_level', 'hijab', 'beard',
   'languages', 'about', 'looking_for',
   // Family
   'family_type', 'father_alive', 'mother_alive', 'father_occupation', 'mother_occupation',
@@ -1016,7 +1136,7 @@ const _kFieldSection = <String, String>{
   'country': 'Basic Information', 'weight_kg': 'Basic Information', 'height_inches': 'Basic Information',
   'complexion': 'Basic Information', 'marital_status': 'Basic Information', 'marriage_number': 'Basic Information',
   'has_kids': 'Basic Information', 'boys': 'Basic Information', 'girls': 'Basic Information',
-  'open_to_polygamy': 'Basic Information', 'caste': 'Basic Information', 'sect': 'Basic Information',
+  'caste': 'Basic Information', 'sect': 'Basic Information',
   'practice_level': 'Basic Information', 'hijab': 'Basic Information', 'beard': 'Basic Information',
   'languages': 'Basic Information', 'about': 'Basic Information', 'looking_for': 'Basic Information',
   'family_type': 'Family', 'father_alive': 'Family', 'mother_alive': 'Family',

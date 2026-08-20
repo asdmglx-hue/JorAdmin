@@ -142,15 +142,16 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
             style: TextStyle(
                 fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white)),
         actions: [
-          if (_history.isNotEmpty)
-            TextButton(
-              onPressed: _clearAll,
-              child: const Text('Clear All',
-                  style: TextStyle(
-                      color: Color(0xFFEF4444),
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13)),
-            ),
+          TextButton(
+            onPressed: _history.isNotEmpty ? _clearAll : null,
+            child: Text('Clear All',
+                style: TextStyle(
+                    color: _history.isNotEmpty
+                        ? const Color(0xFFEF4444)
+                        : Colors.white.withOpacity(0.25),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13)),
+          ),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),

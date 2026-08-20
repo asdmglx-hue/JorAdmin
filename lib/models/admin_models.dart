@@ -218,7 +218,7 @@ class AdminUser {
   final double? weightKg;
   final String? complexion;
   final String maritalStatus;
-  final String? openToPolygamy;
+
   final String? marriageNumber;
   final int? boys;
   final int? girls;
@@ -326,6 +326,8 @@ class AdminUser {
   final bool hasPendingVerificationRequest;
   final String? appliedCouponCode;
   final String? submissionSource; // 'website' | 'android' | null (legacy/admin-imported)
+  final DateTime? lastSeenAt;
+  final String? lastSeenSource;
 
   AdminUser({this.proposalNumber,
     required this.id, required this.name, required this.age, required this.gender,
@@ -335,7 +337,7 @@ class AdminUser {
     this.institute3, this.degreeTitle3, this.degreeCertificate3Url,
     required this.profession, this.professionCategory, this.employmentType,
     this.salaryStart, this.salaryEnd, required this.heightInches, this.weightKg,
-    this.complexion, required this.maritalStatus, this.openToPolygamy, this.marriageNumber, this.boys, this.girls,
+    this.complexion, required this.maritalStatus, this.marriageNumber, this.boys, this.girls,
     this.practiceLevel, this.hijab, this.beard, this.familyType,
     this.fatherAlive, this.motherAlive, this.fatherOccupation, this.motherOccupation,
     this.sisters = 0, this.brothers = 0, this.homeType, this.houseSize,
@@ -353,7 +355,7 @@ class AdminUser {
     this.featuredSchedule = const [], this.activationCode, this.pendingFeaturedTokens = 0,
     this.deletedFrom, this.deletionReason, this.adminNotes, this.registrationAllowed = false, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
     this.guardianCnicFront, this.guardianCnicBack, this.educationDocument, this.hasPendingVerificationRequest = false,
-    this.appliedCouponCode, this.submissionSource,
+    this.appliedCouponCode, this.submissionSource, this.lastSeenAt, this.lastSeenSource,
   });
 
   factory AdminUser.fromJson(Map<String, dynamic> json) {
@@ -439,7 +441,7 @@ class AdminUser {
       weightKg: (json['weight_kg'] as num?)?.toDouble(),
       complexion: json['complexion'] as String?,
       maritalStatus: (json['marital_status'] as String?) ?? '',
-      openToPolygamy: json['open_to_polygamy'] as String?,
+
       marriageNumber: json['marriage_number'] as String?,
       boys: (json['boys'] as num?)?.toInt(), girls: (json['girls'] as num?)?.toInt(),
       practiceLevel: json['practice_level'] as String?,
@@ -494,6 +496,8 @@ class AdminUser {
       hasPendingVerificationRequest: (json['has_pending_verification_request'] as bool?) ?? false,
       appliedCouponCode: json['applied_coupon_code'] as String?,
       submissionSource: json['submission_source'] as String?,
+      lastSeenAt: json['last_seen_at'] != null ? DateTime.parse(json['last_seen_at'] as String).toLocal() : null,
+      lastSeenSource: json['last_seen_source'] as String?,
     );
   }
 
@@ -506,7 +510,7 @@ class AdminUser {
     'profession': profession, if (professionCategory != null) 'profession_category': professionCategory, 'employment_type': employmentType,
     'salary_start': salaryStart, 'salary_end': salaryEnd,
     'height_inches': heightInches, 'weight_kg': weightKg,
-    'complexion': complexion, 'marital_status': maritalStatus, 'open_to_polygamy': openToPolygamy,
+    'complexion': complexion, 'marital_status': maritalStatus,
     'marriage_number': marriageNumber,
     'boys': boys, 'girls': girls, 'practice_level': practiceLevel,
     'hijab': hijab, 'beard': beard, 'family_type': familyType,
@@ -564,7 +568,7 @@ class AdminUser {
     String? institute2, String? degreeTitle2, String? degreeCertificate2Url, String? institute3, String? degreeTitle3, String? degreeCertificate3Url,
     String? profession, String? professionCategory, Object? employmentType = _unset,
     double? salaryStart, double? salaryEnd, double? heightInches, double? weightKg, Object? complexion = _unset,
-    String? maritalStatus, Object? openToPolygamy = _unset, String? marriageNumber, int? boys, int? girls, Object? practiceLevel = _unset, Object? hijab = _unset, Object? beard = _unset, Object? familyType = _unset,
+    String? maritalStatus, String? marriageNumber, int? boys, int? girls, Object? practiceLevel = _unset, Object? hijab = _unset, Object? beard = _unset, Object? familyType = _unset,
     Object? fatherAlive = _unset, Object? motherAlive = _unset, Object? fatherOccupation = _unset,
     Object? motherOccupation = _unset, int? sisters, int? brothers, Object? homeType = _unset, Object? houseSize = _unset,
     Object? hasCar = _unset, Object? hasOtherProperty = _unset, Object? otherProperty = _unset, Object? carName = _unset, Object? location = _unset, Object? country = _unset, bool? hasGenerator, bool? hasSolar, bool? hasServant,
@@ -592,7 +596,7 @@ class AdminUser {
     salaryStart: salaryStart ?? this.salaryStart, salaryEnd: salaryEnd ?? this.salaryEnd,
     heightInches: heightInches ?? this.heightInches, weightKg: weightKg ?? this.weightKg,
     complexion: complexion is _Unset ? this.complexion : complexion as String?, maritalStatus: maritalStatus ?? this.maritalStatus,
-    openToPolygamy: openToPolygamy is _Unset ? this.openToPolygamy : openToPolygamy as String?,
+
     boys: boys ?? this.boys, girls: girls ?? this.girls,
     practiceLevel: practiceLevel is _Unset ? this.practiceLevel : practiceLevel as String?, hijab: hijab is _Unset ? this.hijab : hijab as String?,
     beard: beard is _Unset ? this.beard : beard as String?,
