@@ -408,6 +408,53 @@ class AdminService extends ChangeNotifier {
     _setStatus(userId, ProposalStatus.paused);
   }
 
+  // Tick / untick an AI card. Updates the local cache first so the tick
+  // flips instantly, then writes the column. If the write fails the local
+  // value is put back, so the tick never lies about what's in the DB.
+  /// Approve or reject one document for a proposal. Updates the local cache
+  /// immediately so the UI reflects the change without a full reload.
+  Future<void> setDocVerificationStatus(String userId, String docKey, String status) async {
+    // Optimistic local update
+    final idx = _users.indexWhere((u) => u.id == userId);
+    if (idx != -1) {
+      final updated = Map<String, String>.from(_users[idx].docVerification)
+        ..[docKey] = status;
+      _users[idx] = _users[idx].copyWith(docVerification: updated);
+      notifyListeners();
+    }
+    try {
+      await _db.setDocVerificationStatus(userId, docKey, status);
+      // Reload to get the recalculated is_doc_verified
+      final fresh = await _db.fetchSingleAdminUser(userId);
+      if (fresh != null) {
+        final i = _users.indexWhere((u) => u.id == userId);
+        if (i != -1) { _users[i] = fresh; notifyListeners(); }
+      }
+    } catch (_) {
+      // Revert optimistic change on failure
+      final i = _users.indexWhere((u) => u.id == userId);
+      if (i != -1) { notifyListeners(); }
+    }
+  }
+
+  Future<void> setAiContacted(String userId, bool value) async {
+    final idx = _users.indexWhere((u) => u.id == userId);
+    final previous = idx == -1 ? null : _users[idx].aiContacted;
+    if (idx != -1) {
+      _users[idx] = _users[idx].copyWith(aiContacted: value);
+      notifyListeners();
+    }
+    try {
+      await _db.setAiContacted(userId, value);
+    } catch (_) {
+      final i = _users.indexWhere((u) => u.id == userId);
+      if (i != -1 && previous != null) {
+        _users[i] = _users[i].copyWith(aiContacted: previous);
+        notifyListeners();
+      }
+    }
+  }
+
   Future<void> activateUser(String userId) async {
     await _db.activateUser(userId);
     _setStatus(userId, ProposalStatus.active);

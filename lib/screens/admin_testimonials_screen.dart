@@ -69,6 +69,8 @@ class _AdminTestimonialsScreenState extends State<AdminTestimonialsScreen> {
           AdminBlogCard(onRefreshCallback: (cb) => _refreshBlog = cb),
           const SizedBox(height: 16),
           const DataManagementCard(),
+          const SizedBox(height: 16),
+          const MessageTemplatesCard(),
         ]),
       ),
     );
@@ -655,21 +657,49 @@ class _Field extends StatelessWidget {
 // so changes sync instantly across all platforms.
 class VerificationSettingsCard extends StatefulWidget {
   final void Function(VoidCallback)? onRefreshCallback;
-  const VerificationSettingsCard({super.key, this.onRefreshCallback});
+  final String title;
+  final String keyCandidateCnic;
+  final String keyLatestDegree;
+  final String keyParentsCnic;
+  final String keyRequireAll;
+  final String keyCandidateCnicCompulsory;
+  final String keyLatestDegreeCompulsory;
+  final String keyParentsCnicCompulsory;
+
+  const VerificationSettingsCard({
+    super.key,
+    this.onRefreshCallback,
+    this.title = 'Verification Settings',
+    this.keyCandidateCnic = 'require_candidate_cnic',
+    this.keyLatestDegree  = 'require_latest_degree',
+    this.keyParentsCnic   = 'require_parents_cnic',
+    this.keyRequireAll    = 'require_verification_step',
+    this.keyCandidateCnicCompulsory = 'require_candidate_cnic_compulsory',
+    this.keyLatestDegreeCompulsory  = 'require_latest_degree_compulsory',
+    this.keyParentsCnicCompulsory   = 'require_parents_cnic_compulsory',
+  });
   @override State<VerificationSettingsCard> createState() => _VerificationSettingsCardState();
 }
 
 class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
   bool _loading = true;
-  bool _candidateCnic    = true;
-  bool _latestDegree     = true;
-  bool _parentsCnic      = true;
-  bool _requireVerifStep = false;
+  bool _candidateCnic           = true;
+  bool _latestDegree            = true;
+  bool _parentsCnic             = true;
+  bool _requireVerifStep        = false;
+  bool _candidateCnicCompulsory = true;
+  bool _latestDegreeCompulsory  = false;
+  bool _parentsCnicCompulsory   = true;
+  bool _badgeEnabled            = true;
 
-  static const _keyCandidateCnic = 'require_candidate_cnic';
-  static const _keyLatestDegree  = 'require_latest_degree';
-  static const _keyParentsCnic      = 'require_parents_cnic';
-  static const _keyRequireVerifStep = 'require_verification_step';
+  String get _keyCandidateCnic           => widget.keyCandidateCnic;
+  String get _keyLatestDegree            => widget.keyLatestDegree;
+  String get _keyParentsCnic             => widget.keyParentsCnic;
+  String get _keyRequireVerifStep        => widget.keyRequireAll;
+  String get _keyCandidateCnicCompulsory => widget.keyCandidateCnicCompulsory;
+  String get _keyLatestDegreeCompulsory  => widget.keyLatestDegreeCompulsory;
+  String get _keyParentsCnicCompulsory   => widget.keyParentsCnicCompulsory;
+  static const _keyBadgeEnabled = 'verification_badge_enabled';
 
   @override
   void initState() {
@@ -683,10 +713,14 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
       final rows = await _db.from('app_settings').select('key, value') as List;
       final map = { for (final r in rows) r['key'] as String: r['value'] as String };
       if (mounted) setState(() {
-        _candidateCnic = (map[_keyCandidateCnic] ?? 'true') != 'false';
-        _latestDegree  = (map[_keyLatestDegree]  ?? 'true') != 'false';
-        _parentsCnic      = (map[_keyParentsCnic]      ?? 'true')  != 'false';
-        _requireVerifStep = (map[_keyRequireVerifStep] ?? 'false') == 'true';
+        _candidateCnic           = (map[_keyCandidateCnic]           ?? 'true')  != 'false';
+        _latestDegree            = (map[_keyLatestDegree]            ?? 'true')  != 'false';
+        _parentsCnic             = (map[_keyParentsCnic]             ?? 'true')  != 'false';
+        _requireVerifStep        = (map[_keyRequireVerifStep]        ?? 'false') == 'true';
+        _candidateCnicCompulsory = (map[_keyCandidateCnicCompulsory] ?? 'true')  != 'false';
+        _latestDegreeCompulsory  = (map[_keyLatestDegreeCompulsory]  ?? 'false') == 'true';
+        _parentsCnicCompulsory   = (map[_keyParentsCnicCompulsory]   ?? 'true')  != 'false';
+        _badgeEnabled            = (map[_keyBadgeEnabled]            ?? 'true')  != 'false';
         _loading = false;
       });
     } catch (_) {
@@ -700,6 +734,21 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
       await _db.rpc('admin_upsert_setting', params: {'p_key': key, 'p_value': value.toString()});
       await SupabaseService.instance.fetchAppSettings();
     } catch (_) {}
+  }
+
+  Widget _subRow(String label, String subtitle, bool value, ValueChanged<bool> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, bottom: 4, top: 2),
+      child: Row(children: [
+        Container(width: 2, height: 30, color: kPurple.withOpacity(0.3), margin: const EdgeInsets.only(right: 10)),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white70)),
+          Text(subtitle, style: TextStyle(fontSize: 10.5, color: Colors.white.withOpacity(0.35))),
+        ])),
+        Switch(value: value, onChanged: onChanged, activeColor: kGreen,
+          inactiveThumbColor: Colors.white24, inactiveTrackColor: Colors.white10),
+      ]),
+    );
   }
 
   Widget _row(String label, String subtitle, bool value, ValueChanged<bool> onChanged) {
@@ -741,7 +790,7 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
               child: const Icon(Icons.admin_panel_settings_rounded, color: kPurple, size: 18),
             ),
             const SizedBox(width: 12),
-            const Expanded(child: Text('Verification Settings', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white))),
+            Expanded(child: Text(widget.title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white))),
           ]),
         ),
         Divider(height: 1, color: Colors.white.withOpacity(0.07)),
@@ -760,35 +809,91 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
                   ),
                 ),
                 Divider(height: 1, color: Colors.white.withOpacity(0.07)),
-                _row(
-                  'Candidate CNIC',
-                  'CNIC front & back of the marriage-seeking person',
-                  _candidateCnic,
-                  (v) { setState(() => _candidateCnic = v); _toggle(_keyCandidateCnic, v); },
-                ),
+                _row('Candidate CNIC', 'CNIC front & back of the marriage-seeking person', _candidateCnic,
+                  (v) { setState(() => _candidateCnic = v); _toggle(_keyCandidateCnic, v); }),
+                if (_candidateCnic) _subRow('Compulsory', 'Must be uploaded before proceeding',
+                  _candidateCnicCompulsory, (v) { setState(() => _candidateCnicCompulsory = v); _toggle(_keyCandidateCnicCompulsory, v); }),
                 Divider(height: 1, color: Colors.white.withOpacity(0.05)),
-                _row(
-                  'Latest Degree',
-                  'Most recent education document',
-                  _latestDegree,
-                  (v) { setState(() => _latestDegree = v); _toggle(_keyLatestDegree, v); },
-                ),
+                _row('Latest Degree', 'Most recent education document', _latestDegree,
+                  (v) { setState(() => _latestDegree = v); _toggle(_keyLatestDegree, v); }),
+                if (_latestDegree) _subRow('Compulsory', 'Must be uploaded before proceeding',
+                  _latestDegreeCompulsory, (v) { setState(() => _latestDegreeCompulsory = v); _toggle(_keyLatestDegreeCompulsory, v); }),
                 Divider(height: 1, color: Colors.white.withOpacity(0.05)),
-                _row(
-                  'Parents / Guardian CNIC',
-                  'CNIC front & back of parents or guardian',
-                  _parentsCnic,
-                  (v) { setState(() => _parentsCnic = v); _toggle(_keyParentsCnic, v); },
-                ),
-                Divider(height: 1, color: Colors.white.withOpacity(0.05)),
-                _row(
-                  'Make Verification Compulsory',
-                  'Hides the Skip button — users must upload docs before submitting',
-                  _requireVerifStep,
-                  (v) { setState(() => _requireVerifStep = v); _toggle(_keyRequireVerifStep, v); },
-                ),
+                _row('Parents / Guardian CNIC', 'CNIC front & back of parents or guardian', _parentsCnic,
+                  (v) { setState(() => _parentsCnic = v); _toggle(_keyParentsCnic, v); }),
+                if (_parentsCnic) _subRow('Compulsory', 'Must be uploaded before proceeding',
+                  _parentsCnicCompulsory, (v) { setState(() => _parentsCnicCompulsory = v); _toggle(_keyParentsCnicCompulsory, v); }),
+
               ]),
         ),
+      ]),
+    );
+  }
+}
+
+// ── Verification Badge on/off card ────────────────────────────────────────
+class VerificationBadgeCard extends StatefulWidget {
+  const VerificationBadgeCard({super.key});
+  @override State<VerificationBadgeCard> createState() => _VerificationBadgeCardState();
+}
+
+class _VerificationBadgeCardState extends State<VerificationBadgeCard> {
+  bool _enabled = true;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final db = SupabaseService.instance;
+    final res = await db.client.from('app_settings').select('key,value')
+      .eq('key', 'verification_badge_enabled').maybeSingle();
+    if (!mounted) return;
+    setState(() {
+      _enabled = (res?['value'] ?? 'true') != 'false';
+      _loading = false;
+    });
+  }
+
+  Future<void> _toggle(bool v) async {
+    setState(() => _enabled = v);
+    await SupabaseService.instance.client.from('app_settings')
+      .upsert({'key': 'verification_badge_enabled', 'value': v ? 'true' : 'false'});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1A33),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(width: 3, height: 16, color: kPurple, margin: const EdgeInsets.only(right: 8)),
+          const Expanded(child: Text('Verification Badge', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white))),
+        ]),
+        const SizedBox(height: 12),
+        if (_loading) const Center(child: CircularProgressIndicator())
+        else Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Show Verified Badge', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+            const SizedBox(height: 3),
+            Text('Display a verified badge next to the user name when all compulsory docs are approved by admin',
+              style: TextStyle(fontSize: 11.5, color: Colors.white.withOpacity(0.45), height: 1.4)),
+          ])),
+          Switch(
+            value: _enabled,
+            onChanged: _toggle,
+            activeColor: kGreen,
+            inactiveThumbColor: Colors.white24,
+            inactiveTrackColor: Colors.white10,
+          ),
+        ]),
       ]),
     );
   }
@@ -1080,4 +1185,136 @@ class _DataManagementCardState extends State<DataManagementCard> {
       ]),
     );
   }
+}
+
+
+// ── Message Templates Card ───────────────────────────────────────────────────
+// Allows admin to edit the WhatsApp message templates used in profile view
+// screen copy buttons. Templates are stored in app_settings:
+//   ai_profile_message     — copy icon on AI (inactive) profiles
+//   pending_profile_message — copy icon on doc_pending profiles (Pending chip)
+// Use [NUMBER] as placeholder for the profile number.
+class MessageTemplatesCard extends StatefulWidget {
+  const MessageTemplatesCard({super.key});
+  @override State<MessageTemplatesCard> createState() => _MessageTemplatesCardState();
+}
+
+class _MessageTemplatesCardState extends State<MessageTemplatesCard> {
+  static const _kBg   = Color(0xFF16132A);
+  static const _kCard = Color(0xFF1E1A33);
+
+  bool _loading = true;
+  bool _saving  = false;
+  final _aiCtrl      = TextEditingController();
+  final _pendingCtrl = TextEditingController();
+
+  static const _aiDefault =
+      'Your rishta proposal is currently listed on Jor.\n\n'
+      '\u{1F449} View Your Profile:\n'
+      'https://joronline.com/profile/[NUMBER]\n\n'
+      'Reply \u201Cclaim\u201D to manage your profile for free or \u201Cremove\u201D to remove it from Jor.';
+
+  static const _pendingDefault =
+      'Your marriage proposal is currently listed on Jor\n\n'
+      '\u{1F517} View your profile:\n'
+      'https://joronline.com/profile/[NUMBER]\n\n'
+      'To start your rishta search and connect with families, please complete the verification process by logging in at:\n'
+      '\u{1F449} https://joronline.com/login\n\n'
+      'Or download our mobile app:\n'
+      '\u{1F449} joronline.com/get-android\n\n'
+      'For any questions, feel free to reply here.\n\n'
+      'Jor Team\n'
+      'joronline.com';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _aiCtrl.dispose();
+    _pendingCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final s = await SupabaseService.instance.fetchAppSettings();
+    if (!mounted) return;
+    setState(() {
+      _aiCtrl.text      = s['ai_profile_message']      ?? _aiDefault;
+      _pendingCtrl.text = s['pending_profile_message'] ?? _pendingDefault;
+      _loading = false;
+    });
+  }
+
+  Future<void> _save() async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.content, what: 'editing message templates')) return;
+    setState(() => _saving = true);
+    try {
+      final client = SupabaseService.instance.client;
+      await client.from('app_settings').upsert({'key': 'ai_profile_message',      'value': _aiCtrl.text.trim()});
+      await client.from('app_settings').upsert({'key': 'pending_profile_message', 'value': _pendingCtrl.text.trim()});
+      await SupabaseService.instance.fetchAppSettings();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Templates saved ✓'), backgroundColor: Color(0xFF16A34A), behavior: SnackBarBehavior.floating, duration: Duration(seconds: 2)));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red, behavior: SnackBarBehavior.floating));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(color: _kCard, borderRadius: BorderRadius.circular(16)),
+      padding: const EdgeInsets.all(16),
+      child: _loading
+          ? const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))
+          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Message Templates', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 4),
+              const Text('Use [NUMBER] as placeholder for profile number.', style: TextStyle(color: Colors.white38, fontSize: 12)),
+              const SizedBox(height: 16),
+              _label('AI Profile Message (purple copy icon)'),
+              const SizedBox(height: 6),
+              _field(_aiCtrl),
+              const SizedBox(height: 16),
+              _label('Pending Profile Message (amber copy icon)'),
+              const SizedBox(height: 6),
+              _field(_pendingCtrl),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: GestureDetector(
+                  onTap: _saving ? null : _save,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    decoration: BoxDecoration(color: kPurple, borderRadius: BorderRadius.circular(10)),
+                    child: _saving
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('Save Templates', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ),
+            ]),
+    );
+  }
+
+  Widget _label(String text) => Text(text, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600));
+
+  Widget _field(TextEditingController ctrl) => TextField(
+    controller: ctrl,
+    maxLines: 6,
+    style: const TextStyle(color: Colors.white, fontSize: 12.5, height: 1.6),
+    decoration: InputDecoration(
+      fillColor: const Color(0xFF0F0D1E),
+      filled: true,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: Colors.white.withOpacity(0.08))),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: kPurple)),
+      contentPadding: const EdgeInsets.all(12),
+    ),
+  );
 }

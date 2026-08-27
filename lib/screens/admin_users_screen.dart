@@ -135,9 +135,21 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     // almost nothing, since real expired subscriptions parse to
     // SubscriptionStatus.expired — .inactive is only ever the fallback
     // for missing/unparseable data, not what real expired users have.
-    if (_filter == 'Inactive') list = list.where((u) =>
-        u.subscriptionStatus == SubscriptionStatus.expired ||
-        u.subscriptionStatus == SubscriptionStatus.inactive).toList();
+    // Inactive chip: users with doc_pending subscription (approved but compulsory docs missing)
+    // Red-dot users (have submitted a compulsory doc pending review) sort to top
+    if (_filter == 'Pending') {
+      list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.docPending).toList();
+      list.sort((a, b) {
+        final aDot = _hasCompulsoryDocPending(a) ? 0 : 1;
+        final bDot = _hasCompulsoryDocPending(b) ? 0 : 1;
+        return aDot.compareTo(bDot);
+      });
+    }
+    // Inactive (AI) chip: AI proposals with inactive subscription
+    if (_filter == 'Inactive (AI)') list = list.where((u) =>
+        (u.subscriptionStatus == SubscriptionStatus.expired ||
+         u.subscriptionStatus == SubscriptionStatus.inactive) &&
+        (u.adminNotes == 'AI_IMPORTED' || u.submissionSource == 'ai_batch')).toList();
     if (_filter == 'Active') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.active).toList();
     if (_filter == 'Expired') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.expired).toList();
     if (_filter == 'Paused') list = list.where((u) => u.status == ProposalStatus.paused).toList();
@@ -148,9 +160,24 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     // badge label on each card uses (hasFeaturedBoostToday).
     if (_filter == 'Featured') list = list.where((u) => hasFeaturedBoostToday(u)).toList();
     if (_filter == 'AI') list = list.where((u) => u.adminNotes == 'AI_IMPORTED').toList();
+    // Everyone the AI did NOT import — i.e. real self-submitted profiles.
     if (_filter == 'AI' && _aiSort == 'Permitted') list = list.where((u) => u.registrationAllowed).toList();
     if (_filter == 'AI' && _aiSort == 'Not Permitted') list = list.where((u) => !u.registrationAllowed).toList();
     if (_filter == 'Refunded') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.refunded).toList();
+    // Verified chip: two groups —
+    // 1. Red-dot users: compulsory docs approved, non-compulsory doc pending review
+    // 2. Already verified: is_doc_verified = true (badge already granted)
+    // Settings are read live from cachedSettings so changes in the admin
+    // verification tab take effect immediately without a code change.
+    if (_filter == 'Verified') {
+      list = list.where((u) => _isVerifiedChipUser(u)).toList();
+      // Red-dot users (need action) sort to top
+      list.sort((a, b) {
+        final aDot = _hasNonCompulsoryPending(a) ? 0 : 1;
+        final bDot = _hasNonCompulsoryPending(b) ? 0 : 1;
+        return aDot.compareTo(bDot);
+      });
+    }
     if (_filter == 'Online') list = list.where((u) => u.lastSeenAt != null && DateTime.now().difference(u.lastSeenAt!).inMinutes < 6).toList();
     final now = DateTime.now();
     if (_dateFrom != null && _dateTo != null) {
@@ -385,7 +412,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 
   Widget _buildFilterRow() {
     final s = _S.of(context);
-    final filters = ['All', 'AI', 'Active', 'Inactive', 'Refunded', 'Paused', 'Featured', 'Online'];
+    final filters = ['All', 'Active', 'Pending', 'Verified', 'Featured', 'Inactive (AI)', 'Paused', 'Expired', 'Refunded', 'Online'];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -398,6 +425,16 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
         itemBuilder: (_, i) {
           final f = filters[i];
           final sel = _filter == f;
+          // Badge counts for Verified and Inactive chips
+          final verifiedCount = f == 'Verified'
+              ? widget.svc.users.where((u) => _hasNonCompulsoryPending(u)).length
+              : 0;
+          final pendingCount = f == 'Pending'
+              ? widget.svc.users.where((u) => _hasCompulsoryDocPending(u)).length
+              : 0;
+          final showBadge = (f == 'Verified' && verifiedCount > 0) || (f == 'Pending' && pendingCount > 0);
+          final badgeCount = f == 'Verified' ? verifiedCount : pendingCount;
+          final badgeColor = f == 'Pending' ? const Color(0xFF6B7280) : kGreen;
           return GestureDetector(
             onTap: () => setState(() { _filter = f; if (f != 'AI') _aiSort = 'All'; }),
             child: AnimatedContainer(
@@ -407,10 +444,20 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
               decoration: BoxDecoration(
                 color: sel ? kPurple : const Color(0xFF16132A),
                 borderRadius: BorderRadius.circular(s.s(20)),
-                border: Border.all(color: sel ? kPurple : Colors.white.withOpacity(0.1)),
+                border: Border.all(color: sel ? kPurple : (showBadge ? badgeColor.withOpacity(0.5) : Colors.white.withOpacity(0.1))),
               ),
               child: Center(
-                child: Text(f, style: TextStyle(fontSize: s.f(12.5), fontWeight: FontWeight.w600, color: sel ? Colors.white : Colors.white.withOpacity(0.4))),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(f, style: TextStyle(fontSize: s.f(12.5), fontWeight: FontWeight.w600, color: sel ? Colors.white : Colors.white.withOpacity(0.4))),
+                  if (showBadge) ...[
+                    SizedBox(width: s.s(5)),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: s.s(5), vertical: s.s(1)),
+                      decoration: BoxDecoration(color: sel ? Colors.white.withOpacity(0.25) : badgeColor, borderRadius: BorderRadius.circular(s.s(8))),
+                      child: Text('$badgeCount', style: TextStyle(fontSize: s.f(10), fontWeight: FontWeight.w800, color: Colors.white)),
+                    ),
+                  ],
+                ]),
               ),
             ),
           );
@@ -450,6 +497,63 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
       ],
     );
   }
+}
+
+// ── Verified chip helpers — read live settings so admin changes take effect ──
+const _verifDocKeys = {
+  'candidate_cnic': ['cnic_front', 'cnic_back'],
+  'latest_degree':  ['education_document'],
+  'parents_cnic':   ['guardian_cnic_front', 'guardian_cnic_back'],
+};
+
+bool _compulsoryDocsApproved(AdminUser u) {
+  final s = SupabaseService.instance.cachedSettings;
+  final dv = u.docVerification;
+  for (final entry in _verifDocKeys.entries) {
+    final shown      = s['verify_now_${entry.key}'] != 'false';
+    final compulsory = s['verify_now_${entry.key}_compulsory'] != 'false';
+    if (!shown || !compulsory) continue;
+    final allApproved = entry.value.every((k) => dv[k] == 'approved');
+    if (!allApproved) return false;
+  }
+  return true;
+}
+
+bool _hasNonCompulsoryPending(AdminUser u) {
+  if (u.isDocVerified) return false;
+  final s = SupabaseService.instance.cachedSettings;
+  final dv = u.docVerification;
+  for (final entry in _verifDocKeys.entries) {
+    final shown      = s['verify_now_${entry.key}'] != 'false';
+    final compulsory = s['verify_now_${entry.key}_compulsory'] != 'false';
+    if (!shown || compulsory) continue;
+    final anyPending = entry.value.any((k) => dv[k] == 'pending');
+    if (anyPending && _compulsoryDocsApproved(u)) return true;
+  }
+  return false;
+}
+
+// True when user has doc_pending subscription AND has submitted at least one
+// compulsory doc that is now pending admin review — signals the red dot on eye icon.
+bool _hasCompulsoryDocPending(AdminUser u) {
+  if (u.subscriptionStatus != SubscriptionStatus.docPending) return false;
+  final s = SupabaseService.instance.cachedSettings;
+  final dv = u.docVerification;
+  for (final entry in _verifDocKeys.entries) {
+    final shown      = s['verify_now_${entry.key}'] != 'false';
+    final compulsory = s['verify_now_${entry.key}_compulsory'] != 'false';
+    if (!shown || !compulsory) continue;
+    final anyPending = entry.value.any((k) => dv[k] == 'pending');
+    if (anyPending) return true;
+  }
+  return false;
+}
+
+bool _isVerifiedChipUser(AdminUser u) {
+  // Pending users never appear in Verified chip
+  if (u.status == ProposalStatus.pending) return false;
+  if (u.isDocVerified) return true;
+  return _hasNonCompulsoryPending(u);
 }
 
 class _UserCard extends StatefulWidget {
@@ -561,6 +665,34 @@ class _UserCardState extends State<_UserCard> {
                             style: TextStyle(fontSize: s.f(11), fontWeight: FontWeight.w600,
                               color: Colors.white.withOpacity(0.45)),
                           ),
+                          // Plain tick box, AI cards only — one tap marks this
+                          // profile as done (green tick), another tap clears
+                          // it. No label, no dialog, no confirmation; the value
+                          // is saved to proposals.ai_contacted.
+                          if (user.adminNotes == 'AI_IMPORTED') ...[
+                            SizedBox(width: s.s(6)),
+                            GestureDetector(
+                              onTap: () {
+                                if (!AdminPerms.i.guardEdit(AdminPageKeys.users)) return;
+                                HapticFeedback.selectionClick();
+                                svc.setAiContacted(user.id, !user.aiContacted);
+                              },
+                              child: Container(
+                                width: s.d(16), height: s.d(16),
+                                decoration: BoxDecoration(
+                                  color: user.aiContacted ? kGreen : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(s.s(4)),
+                                  border: Border.all(
+                                    color: user.aiContacted ? kGreen : Colors.white.withOpacity(0.3),
+                                    width: 1.4,
+                                  ),
+                                ),
+                                child: user.aiContacted
+                                    ? Icon(Icons.check_rounded, size: s.d(12), color: Colors.white)
+                                    : null,
+                              ),
+                            ),
+                          ],
                           if (user.lastSeenAt != null) ...[
                             Text('  •  ', style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.25))),
                             _LastSeenText(lastSeen: user.lastSeenAt!, source: user.lastSeenSource),
@@ -575,11 +707,24 @@ class _UserCardState extends State<_UserCard> {
                   padding: EdgeInsets.only(top: s.s(2)),
                   child: GestureDetector(
                     onTap: onView,
-                    child: Container(
-                      width: s.d(28), height: s.d(28),
-                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(8))),
-                      child: Icon(Icons.remove_red_eye_outlined, size: s.d(16), color: Colors.white.withOpacity(0.5)),
-                    ),
+                    child: Stack(clipBehavior: Clip.none, children: [
+                      Container(
+                        width: s.d(28), height: s.d(28),
+                        decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(8))),
+                        child: Icon(Icons.remove_red_eye_outlined, size: s.d(16), color: Colors.white.withOpacity(0.5)),
+                      ),
+                      if (_hasNonCompulsoryPending(user) || _hasCompulsoryDocPending(user))
+                        Positioned(
+                          top: -2, right: -2,
+                          child: Container(
+                            width: s.d(8), height: s.d(8),
+                            decoration: BoxDecoration(
+                              color: kRose, shape: BoxShape.circle,
+                              border: Border.all(color: const Color(0xFF16132A), width: 1.5),
+                            ),
+                          ),
+                        ),
+                    ]),
                   ),
                 ),
               ],
@@ -594,7 +739,7 @@ class _UserCardState extends State<_UserCard> {
               children: [
                 _InfoChip(
                   label: 'Start',
-                  value: user.subscriptionStatus != SubscriptionStatus.inactive && user.subscriptionStart != null
+                  value: user.subscriptionStatus != SubscriptionStatus.inactive && user.subscriptionStatus != SubscriptionStatus.docPending && user.subscriptionStart != null
                       ? _date(user.subscriptionStart!)
                       : '—',
                   color: kTeal,
@@ -602,7 +747,7 @@ class _UserCardState extends State<_UserCard> {
                 _divider(context),
                 _InfoChip(
                   label: 'Days Left',
-                  value: user.adminNotes == 'AI_IMPORTED'
+                  value: user.adminNotes == 'AI_IMPORTED' || user.subscriptionStatus == SubscriptionStatus.docPending
                       ? '—'
                       : user.subscriptionStatus != SubscriptionStatus.inactive
                           ? user.subscriptionDaysLeft
@@ -809,6 +954,7 @@ class _UserCardState extends State<_UserCard> {
 
   Color _badgeColor(AdminUser u) {
     if (u.subscriptionStatus == SubscriptionStatus.refunded) return kRose;
+    if (u.subscriptionStatus == SubscriptionStatus.docPending) return const Color(0xFF6B7280);
     if (u.status == ProposalStatus.paused) return kTeal;
     if (u.subscriptionStatus == SubscriptionStatus.expired || u.subscriptionStatus == SubscriptionStatus.inactive) return const Color(0xFF6B7280);
     if (hasFeaturedBoostToday(u)) return kAmber;
@@ -819,11 +965,13 @@ class _UserCardState extends State<_UserCard> {
       case SubscriptionStatus.expired: return const Color(0xFF6B7280);
       case SubscriptionStatus.inactive: return Colors.white38;
       case SubscriptionStatus.refunded: return kRose;
+      case SubscriptionStatus.docPending: return const Color(0xFF6B7280);
     }
   }
 
   String _badgeLabel(AdminUser u) {
     if (u.subscriptionStatus == SubscriptionStatus.refunded) return 'Refunded';
+    if (u.subscriptionStatus == SubscriptionStatus.docPending) return 'Pending';
     if (u.status == ProposalStatus.paused) return 'Paused';
     if (u.status == ProposalStatus.approved) return 'Active';
     if (u.subscriptionStatus == SubscriptionStatus.expired || u.subscriptionStatus == SubscriptionStatus.inactive) return 'Inactive';
@@ -835,6 +983,7 @@ class _UserCardState extends State<_UserCard> {
       case SubscriptionStatus.expired: return 'Inactive';
       case SubscriptionStatus.inactive: return '';
       case SubscriptionStatus.refunded: return 'Refunded';
+      case SubscriptionStatus.docPending: return 'Doc Pending';
     }
   }
 
@@ -1063,35 +1212,22 @@ class _UserCardState extends State<_UserCard> {
           actionsAlignment: MainAxisAlignment.spaceBetween,
           actions: [
             Builder(builder: (context) {
-              final copyEnabled = cnicCtrl.text.trim().isNotEmpty && passwordCtrl.text.trim().isNotEmpty && (int.tryParse(daysCtrl.text.trim()) ?? 0) > 0;
+              final copyEnabled = cnicCtrl.text.replaceAll('-', '').length == 13 && passwordCtrl.text.trim().isNotEmpty;
               return GestureDetector(
                 onTap: !copyEnabled ? null : () {
-                  final days = int.parse(daysCtrl.text.trim());
-                  final validUntil = DateTime.now().add(Duration(days: days));
-                  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-                  final validUntilStr = '${validUntil.day} ${months[validUntil.month - 1]} ${validUntil.year}';
                   final message = '''
 *Your Login Details*
 
 *CNIC:* ${cnicCtrl.text.trim()}
 *Password:* ${passwordCtrl.text.trim()}
 
-*View Your Profile:*
-https://joronline.com/profile/${widget.user.proposalNumber}
+Login here:
+👉 joronline.com/login
 
-You can change your password and update your profile after logging in.
+Or download the mobile app:
+👉 joronline.com/get-android
 
-*Website:*
-joronline.com
-
-*Android App:*
-joronline.com/get-android
-
-Your *Free Plan* is valid until: *$validUntilStr*
-
-We're available 24/7 on WhatsApp to assist you, and we wish you success in finding the right rishta on Jor!
-
-Jor Team 🤗'''.trim();
+Thanks for joining Jor! We wish you the best in finding the right match.'''.trim();
                   Clipboard.setData(ClipboardData(text: message));
                   HapticFeedback.lightImpact();
                 },
@@ -1146,13 +1282,21 @@ Jor Team 🤗'''.trim();
     );
   }
 
-  // Random password for the auto-generate button — deliberately excludes
-  // visually-confusable characters (0/O, 1/l/I) so a typed-out password
-  // is easy to read back correctly if it ever needs to be shared.
+  // Random password for the auto-generate button — 6 characters, lowercase
+  // letters and digits only, and no visually-confusable characters
+  // (0/o, 1/l, i, j) so it is easy to read out on WhatsApp and easy to
+  // type on a phone. Always mixes at least one letter and one digit.
   String _generateAiPassword() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    const letters = 'abcdefghkmnpqrstuvwxyz';
+    const digits = '23456789';
+    const chars = letters + digits;
     final rand = Random.secure();
-    return List.generate(8, (_) => chars[rand.nextInt(chars.length)]).join();
+    while (true) {
+      final pw = List.generate(6, (_) => chars[rand.nextInt(chars.length)]).join();
+      final hasLetter = pw.split('').any(letters.contains);
+      final hasDigit = pw.split('').any(digits.contains);
+      if (hasLetter && hasDigit) return pw;
+    }
   }
 }
 

@@ -122,6 +122,7 @@ class NotificationService extends ChangeNotifier with WidgetsBindingObserver {
           .from('notification_log')
           .select()
           .eq('proposal_id', proposalId)
+          .isFilter('read_at', null)  // only unread — cleared notifications stay gone
           .order('created_at', ascending: false)
           .limit(_kHistoryLimit);
       _history = (rows as List)

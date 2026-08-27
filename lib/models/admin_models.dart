@@ -5,7 +5,7 @@ const _unset = _Unset();
 
 enum ProposalStatus { pending, approved, active, paused, expired, deleted }
 enum SubscriptionTier { none, basic, featured }
-enum SubscriptionStatus { inactive, active, expired, refunded }
+enum SubscriptionStatus { inactive, active, expired, refunded, docPending }
 
 // ── Activation Code ───────────────────────────────────────────────────────────
 class ActivationCode {
@@ -315,6 +315,16 @@ class AdminUser {
   final String? deletionReason;
   final String? adminNotes;
   final bool registrationAllowed;
+  // Admin-only tick on AI-imported cards in the Users screen.
+  final bool aiContacted;
+
+  // Per-document approval status from admin verification review.
+  // Keys: cnic_front, cnic_back, education_document, guardian_cnic_front, guardian_cnic_back.
+  // Values: 'pending' | 'approved' | 'rejected' (or missing = not reviewed yet).
+  final Map<String, String> docVerification;
+
+  // True when all compulsory documents are admin-approved.
+  final bool isDocVerified;
   final String? discarded;
   final String? suggestedInfo;
   final String? profilePhoto;
@@ -353,7 +363,7 @@ class AdminUser {
     this.subscriptionStart, this.subscriptionExpiry,
     this.totalSpending = 0, this.featuredPointsPurchased = 0, this.featuredPointsUsed = 0,
     this.featuredSchedule = const [], this.activationCode, this.pendingFeaturedTokens = 0,
-    this.deletedFrom, this.deletionReason, this.adminNotes, this.registrationAllowed = false, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
+    this.deletedFrom, this.deletionReason, this.adminNotes, this.registrationAllowed = false, this.aiContacted = false, this.docVerification = const {}, this.isDocVerified = false, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
     this.guardianCnicFront, this.guardianCnicBack, this.educationDocument, this.hasPendingVerificationRequest = false,
     this.appliedCouponCode, this.submissionSource, this.lastSeenAt, this.lastSeenSource,
   });
@@ -395,6 +405,7 @@ class AdminUser {
       case 'active': subStatus = SubscriptionStatus.active; break;
       case 'expired': subStatus = SubscriptionStatus.expired; break;
       case 'refunded': subStatus = SubscriptionStatus.refunded; break;
+      case 'doc_pending': subStatus = SubscriptionStatus.docPending; break;
       default: subStatus = SubscriptionStatus.inactive;
     }
 
@@ -487,6 +498,10 @@ class AdminUser {
       deletionReason: json['deletion_reason'] as String?,
       adminNotes: json['admin_notes'] as String?,
       registrationAllowed: json['registration_allowed'] as bool? ?? false,
+      aiContacted: json['ai_contacted'] as bool? ?? false,
+      docVerification: (json['doc_verification'] as Map<String, dynamic>? ?? {})
+          .map((k, v) => MapEntry(k, v as String? ?? 'pending')),
+      isDocVerified: json['is_doc_verified'] as bool? ?? false,
       discarded: json['discarded'] as String?,
       suggestedInfo: json['suggested_info'] as String?,
       profilePhoto: profilePhoto, cnicFront: cnicFront, cnicBack: cnicBack,
@@ -564,8 +579,8 @@ class AdminUser {
     DateTime? subscriptionStart, DateTime? subscriptionExpiry, double? totalSpending,
     int? featuredPointsPurchased, int? featuredPointsUsed, List<FeaturedBoost>? featuredSchedule,
     String? activationCode, String? name, int? age, String? gender, String? city, String? caste,
-    String? sect, List<String>? languages, String? education, String? institute, String? degreeTitle, String? degreeCertificateUrl,
-    String? institute2, String? degreeTitle2, String? degreeCertificate2Url, String? institute3, String? degreeTitle3, String? degreeCertificate3Url,
+    String? sect, List<String>? languages, String? education, String? institute, String? degreeTitle, Object? degreeCertificateUrl = _unset,
+    String? institute2, String? degreeTitle2, Object? degreeCertificate2Url = _unset, String? institute3, String? degreeTitle3, Object? degreeCertificate3Url = _unset,
     String? profession, String? professionCategory, Object? employmentType = _unset,
     double? salaryStart, double? salaryEnd, double? heightInches, double? weightKg, Object? complexion = _unset,
     String? maritalStatus, String? marriageNumber, int? boys, int? girls, Object? practiceLevel = _unset, Object? hijab = _unset, Object? beard = _unset, Object? familyType = _unset,
@@ -576,8 +591,8 @@ class AdminUser {
     bool? emailVerified, bool? cnicVerified, Object? cnic = _unset, Object? smokes = _unset, bool? drinks,
     Object? monthlyIncome = _unset, Object? hasDisability = _unset, Object? physicallyActive = _unset, String? disabilityDetails,
     bool? hasKids, Object? hasSiblings = _unset,
-    int? pendingFeaturedTokens, String? deletedFrom, Object? deletionReason = _unset, String? adminNotes, bool? registrationAllowed,
-    String? profilePhoto, Object? cnicFront = _unset, Object? cnicBack = _unset, String? password,
+    int? pendingFeaturedTokens, String? deletedFrom, Object? deletionReason = _unset, String? adminNotes, bool? registrationAllowed, bool? aiContacted, Map<String, String>? docVerification, bool? isDocVerified,
+    Object? profilePhoto = _unset, Object? cnicFront = _unset, Object? cnicBack = _unset, String? password,
     Object? guardianCnicFront = _unset, Object? guardianCnicBack = _unset, Object? educationDocument = _unset,
     String? appliedCouponCode, String? submissionSource,
   }) => AdminUser(
@@ -586,11 +601,11 @@ class AdminUser {
     caste: caste ?? this.caste, sect: sect ?? this.sect, languages: languages ?? this.languages,
     education: education ?? this.education, institute: institute ?? this.institute,
     degreeTitle: degreeTitle ?? this.degreeTitle,
-    degreeCertificateUrl: degreeCertificateUrl ?? this.degreeCertificateUrl,
+    degreeCertificateUrl: degreeCertificateUrl is _Unset ? this.degreeCertificateUrl : degreeCertificateUrl as String?,
     institute2: institute2 ?? this.institute2, degreeTitle2: degreeTitle2 ?? this.degreeTitle2,
-    degreeCertificate2Url: degreeCertificate2Url ?? this.degreeCertificate2Url,
+    degreeCertificate2Url: degreeCertificate2Url is _Unset ? this.degreeCertificate2Url : degreeCertificate2Url as String?,
     institute3: institute3 ?? this.institute3, degreeTitle3: degreeTitle3 ?? this.degreeTitle3,
-    degreeCertificate3Url: degreeCertificate3Url ?? this.degreeCertificate3Url,
+    degreeCertificate3Url: degreeCertificate3Url is _Unset ? this.degreeCertificate3Url : degreeCertificate3Url as String?,
     proposalNumber: proposalNumber ?? this.proposalNumber,
     profession: profession ?? this.profession, professionCategory: professionCategory ?? this.professionCategory, employmentType: employmentType is _Unset ? this.employmentType : employmentType as String?,
     salaryStart: salaryStart ?? this.salaryStart, salaryEnd: salaryEnd ?? this.salaryEnd,
@@ -629,8 +644,8 @@ class AdminUser {
     featuredSchedule: featuredSchedule ?? this.featuredSchedule,
     activationCode: activationCode ?? this.activationCode,
     pendingFeaturedTokens: pendingFeaturedTokens ?? this.pendingFeaturedTokens,
-    deletedFrom: deletedFrom ?? this.deletedFrom, deletionReason: deletionReason is _Unset ? this.deletionReason : deletionReason as String?, adminNotes: adminNotes ?? this.adminNotes, registrationAllowed: registrationAllowed ?? this.registrationAllowed, discarded: discarded ?? this.discarded, suggestedInfo: suggestedInfo ?? this.suggestedInfo,
-    profilePhoto: profilePhoto ?? this.profilePhoto,
+    deletedFrom: deletedFrom ?? this.deletedFrom, deletionReason: deletionReason is _Unset ? this.deletionReason : deletionReason as String?, adminNotes: adminNotes ?? this.adminNotes, registrationAllowed: registrationAllowed ?? this.registrationAllowed, aiContacted: aiContacted ?? this.aiContacted, docVerification: docVerification ?? this.docVerification, isDocVerified: isDocVerified ?? this.isDocVerified, discarded: discarded ?? this.discarded, suggestedInfo: suggestedInfo ?? this.suggestedInfo,
+    profilePhoto: profilePhoto is _Unset ? this.profilePhoto : profilePhoto as String?,
     cnicFront: cnicFront is _Unset ? this.cnicFront : cnicFront as String?,
     cnicBack: cnicBack is _Unset ? this.cnicBack : cnicBack as String?,
     guardianCnicFront: guardianCnicFront is _Unset ? this.guardianCnicFront : guardianCnicFront as String?,

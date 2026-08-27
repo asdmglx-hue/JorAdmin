@@ -14,21 +14,25 @@ import 'admin_trash_screen.dart';
 // can be approved. Returns the human-readable labels of whatever's still
 // missing, so the block message can name exactly what's needed.
 List<String> _missingVerificationDocs(AdminUser user, Map<String, String> settings) {
-  // Only check documents that the admin has toggled ON in Verification Settings.
-  // If a requirement is off, skip that document — don't block approval for it.
+  // Uses verify_now_*_compulsory settings (same keys used by the Verified chip
+  // and the approve logic in supabase_service.dart) — NOT the old require_*
+  // keys which are all false and never trigger anything.
   final missing = <String>[];
-  final requireCnic    = settings['require_candidate_cnic'] != 'false';
-  final requireDegree  = settings['require_latest_degree']  != 'false';
-  final requireParents = settings['require_parents_cnic']   != 'false';
+  final cnicShown      = settings['verify_now_candidate_cnic'] != 'false';
+  final cnicCompulsory = settings['verify_now_candidate_cnic_compulsory'] != 'false';
+  final degreeShown      = settings['verify_now_latest_degree'] != 'false';
+  final degreeCompulsory = settings['verify_now_latest_degree_compulsory'] == 'true';
+  final parentsShown      = settings['verify_now_parents_cnic'] != 'false';
+  final parentsCompulsory = settings['verify_now_parents_cnic_compulsory'] != 'false';
 
-  if (requireCnic) {
+  if (cnicShown && cnicCompulsory) {
     if (user.cnicFront == null || user.cnicFront!.isEmpty) missing.add('CNIC Front');
     if (user.cnicBack  == null || user.cnicBack!.isEmpty)  missing.add('CNIC Back');
   }
-  if (requireDegree) {
+  if (degreeShown && degreeCompulsory) {
     if (user.educationDocument == null || user.educationDocument!.isEmpty) missing.add('Education Document');
   }
-  if (requireParents) {
+  if (parentsShown && parentsCompulsory) {
     if (user.guardianCnicFront == null || user.guardianCnicFront!.isEmpty) missing.add('Guardian CNIC Front');
     if (user.guardianCnicBack  == null || user.guardianCnicBack!.isEmpty)  missing.add('Guardian CNIC Back');
   }
@@ -335,7 +339,7 @@ class _ApprovedCard extends StatelessWidget {
               ),
               Builder(builder: (ctx) => GestureDetector(
                 onTap: () => Navigator.push(ctx, MaterialPageRoute(
-                  builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: true))),
+                  builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: !AdminPerms.i.canEdit(AdminPageKeys.orders)))),
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
@@ -348,13 +352,27 @@ class _ApprovedCard extends StatelessWidget {
                       child: Icon(Icons.remove_red_eye_outlined,
                           size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
                     ),
-                    if (svc.pendingVerificationProposalIds.contains(user.id) ||
-                        user.hasPendingVerificationRequest ||
-                        (user.cnicFront != null && user.cnicFront!.isNotEmpty) ||
-                        (user.cnicBack != null && user.cnicBack!.isNotEmpty) ||
-                        (user.educationDocument != null && user.educationDocument!.isNotEmpty) ||
-                        (user.guardianCnicFront != null && user.guardianCnicFront!.isNotEmpty) ||
-                        (user.guardianCnicBack != null && user.guardianCnicBack!.isNotEmpty))
+                    if (() {
+                        // Show red dot if any uploaded doc is still pending review
+                        final hasAnyDoc = (user.cnicFront?.isNotEmpty ?? false) ||
+                            (user.cnicBack?.isNotEmpty ?? false) ||
+                            (user.educationDocument?.isNotEmpty ?? false) ||
+                            (user.guardianCnicFront?.isNotEmpty ?? false) ||
+                            (user.guardianCnicBack?.isNotEmpty ?? false);
+                        if (!hasAnyDoc) return false;
+                        final dv = user.docVerification;
+                        // Check if any uploaded doc is still pending
+                        final checks = <MapEntry<String?, String>>[
+                          MapEntry(user.cnicFront, 'cnic_front'),
+                          MapEntry(user.cnicBack, 'cnic_back'),
+                          MapEntry(user.educationDocument, 'education_document'),
+                          MapEntry(user.guardianCnicFront, 'guardian_cnic_front'),
+                          MapEntry(user.guardianCnicBack, 'guardian_cnic_back'),
+                        ];
+                        return checks.any((e) =>
+                          (e.key?.isNotEmpty ?? false) &&
+                          (dv[e.value] ?? 'pending') == 'pending');
+                      }())
                       Positioned(
                         top: -2, right: -2,
                         child: Container(
@@ -525,7 +543,7 @@ class _PendingCard extends StatelessWidget {
               ),
               Builder(builder: (ctx) => GestureDetector(
                 onTap: () => Navigator.push(ctx, MaterialPageRoute(
-                  builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: true))),
+                  builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: !AdminPerms.i.canEdit(AdminPageKeys.orders)))),
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
@@ -538,13 +556,27 @@ class _PendingCard extends StatelessWidget {
                       child: Icon(Icons.remove_red_eye_outlined,
                           size: _S.of(context).d(16), color: Colors.white.withOpacity(0.5)),
                     ),
-                    if (svc.pendingVerificationProposalIds.contains(user.id) ||
-                        user.hasPendingVerificationRequest ||
-                        (user.cnicFront != null && user.cnicFront!.isNotEmpty) ||
-                        (user.cnicBack != null && user.cnicBack!.isNotEmpty) ||
-                        (user.educationDocument != null && user.educationDocument!.isNotEmpty) ||
-                        (user.guardianCnicFront != null && user.guardianCnicFront!.isNotEmpty) ||
-                        (user.guardianCnicBack != null && user.guardianCnicBack!.isNotEmpty))
+                    if (() {
+                        // Show red dot if any uploaded doc is still pending review
+                        final hasAnyDoc = (user.cnicFront?.isNotEmpty ?? false) ||
+                            (user.cnicBack?.isNotEmpty ?? false) ||
+                            (user.educationDocument?.isNotEmpty ?? false) ||
+                            (user.guardianCnicFront?.isNotEmpty ?? false) ||
+                            (user.guardianCnicBack?.isNotEmpty ?? false);
+                        if (!hasAnyDoc) return false;
+                        final dv = user.docVerification;
+                        // Check if any uploaded doc is still pending
+                        final checks = <MapEntry<String?, String>>[
+                          MapEntry(user.cnicFront, 'cnic_front'),
+                          MapEntry(user.cnicBack, 'cnic_back'),
+                          MapEntry(user.educationDocument, 'education_document'),
+                          MapEntry(user.guardianCnicFront, 'guardian_cnic_front'),
+                          MapEntry(user.guardianCnicBack, 'guardian_cnic_back'),
+                        ];
+                        return checks.any((e) =>
+                          (e.key?.isNotEmpty ?? false) &&
+                          (dv[e.value] ?? 'pending') == 'pending');
+                      }())
                       Positioned(
                         top: -2, right: -2,
                         child: Container(
@@ -594,29 +626,48 @@ class _PendingCard extends StatelessWidget {
                   final settings = await SupabaseService.instance.fetchAppSettings();
                   final missingDocs = _missingVerificationDocs(user, settings);
                   if (missingDocs.isNotEmpty) {
-                    showDialog(
+                    final approveAnyway = await showDialog<bool>(
                       context: context,
                       builder: (_) => AlertDialog(
                         backgroundColor: const Color(0xFF16132A),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_S.of(context).s(20))),
-                        title: const Text('Verification Incomplete', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
-                        content: Text(
-                          'This profile is missing: ${missingDocs.join(', ')}.\n\nUpload the missing documents in the Verification section of the edit profile screen before approving.',
-                          style: TextStyle(color: Colors.white70, fontSize: _S.of(context).f(13.5), height: 1.55),
+                        title: Row(children: [
+                          Icon(Icons.warning_amber_rounded, color: kAmber, size: _S.of(context).d(20)),
+                          SizedBox(width: _S.of(context).s(8)),
+                          const Text('Verification Incomplete', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                        ]),
+                        content: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Missing: ${missingDocs.join(', ')}.',
+                              style: TextStyle(color: kAmber, fontSize: _S.of(context).f(13), fontWeight: FontWeight.w700, height: 1.5),
+                            ),
+                            SizedBox(height: _S.of(context).s(10)),
+                            Text(
+                              'Approving without verification documents will make this profile visible in the feed but contacts will stay locked until the user submits and you approve the missing documents.',
+                              style: TextStyle(color: Colors.white70, fontSize: _S.of(context).f(13), height: 1.55),
+                            ),
+                          ],
                         ),
                         actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5))),
+                          ),
                           GestureDetector(
-                            onTap: () => Navigator.pop(context),
+                            onTap: () => Navigator.pop(context, true),
                             child: Container(
                               padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(16), vertical: _S.of(context).s(10)),
-                              decoration: BoxDecoration(color: kPurple, borderRadius: BorderRadius.circular(_S.of(context).s(10))),
-                              child: const Text('OK', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                              decoration: BoxDecoration(color: kAmber, borderRadius: BorderRadius.circular(_S.of(context).s(10))),
+                              child: const Text('Approve Anyway', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
                             ),
                           ),
                         ],
                       ),
                     );
-                    return;
+                    if (approveAnyway != true) return;
                   }
                   // AI imported proposals: skip payment dialog, approve with 0 amount
                   if (user.adminNotes == 'AI_IMPORTED') {

@@ -60,6 +60,7 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
           read: n['read_at'] != null,
         );
       }).toList();
+      debugPrint('[NOTIF_LOAD] Loaded ${history.length} notifications from DB (total rows: ${rows.length})');
       if (mounted) setState(() { _history = history; _loading = false; });
 
       // Always show what's actually on disk, then mark it read.
@@ -100,9 +101,15 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
     );
     if (confirmed != true) return;
     try {
-      await _client.from('notification_log').delete().eq('type', 'new_order');
+      debugPrint('[NOTIF_CLEAR] Starting clear all...');
+      debugPrint('[NOTIF_CLEAR] Total rows to delete: ${_history.length}');
+      final result = await _client.from('notification_log').delete().eq('type', 'new_order').select();
+      debugPrint('[NOTIF_CLEAR] Delete result: ${result.length} rows deleted');
       if (mounted) setState(() { _history = []; _visibleCount = _kPageSize; });
-    } catch (_) {}
+      debugPrint('[NOTIF_CLEAR] UI cleared');
+    } catch (e) {
+      debugPrint('[NOTIF_CLEAR] Error: $e');
+    }
   }
 
   String _timeAgo(DateTime t) {

@@ -122,6 +122,11 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   late TextEditingController _fatherOccCtrl;
   late TextEditingController _motherOccCtrl;
 
+  // True while a photo removal is mid-write. Blocks the realtime-driven
+  // refresh from re-merging the photo back in before all three places are
+  // cleared. See _onPhotoChanged.
+  bool _photoOpInFlight = false;
+
   // Local string vars for subfield visibility (mirrors _user fields)
   late String _siblingsVal;
   late String _houseVal;
@@ -251,7 +256,11 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   // this, this quietly re-fetches in the background and patches in just
   // the CNIC fields once they arrive — everything else the person may
   // already be mid-editing stays untouched.
-  Future<void> _refreshCnicStatus() async {
+  Future<void> _refreshCnicStatus({bool force = false}) async {
+    // A photo removal writes to proposals, which bounces straight back at us
+    // as a realtime UPDATE. Re-fetching mid-removal would merge the photo back
+    // in from the verification request row that hasn't been cleared yet.
+    if (_photoOpInFlight && !force) return;
     try {
       final fresh = await SupabaseService.instance.fetchSingleAdminUser(widget.user.id);
       if (fresh == null || !mounted) return;
@@ -432,7 +441,8 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     final updated = _buildUpdated();
     widget.svc.updateUser(updated);
     HapticFeedback.mediumImpact();
-    Navigator.pop(context);
+    // Stay on screen — update baseline so Save button goes inactive again
+    setState(() => _baseline = updated);
   }
 
   @override
@@ -593,66 +603,83 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
                 photoUrl: _user.profilePhoto,
                 cnicOrId: _user.cnic ?? _user.id,
                 photoType: 'profile',
-                onChanged: (url) => setState(() => _user = _user.copyWith(profilePhoto: url)),
+                onChanged: (url) => _onPhotoChanged('profile', url, (u) => _user.copyWith(profilePhoto: u)),
                 crop: true,
               )),
             ],
           ),
           SizedBox(height: _S.of(context).s(16)),
           _mainHeader('Verification'),
-          SizedBox(height: _S.of(context).s(8)),
-          Text('Marriage-seeking Person', style: TextStyle(fontSize: _S.of(context).f(11.5), fontWeight: FontWeight.w600,
-              color: Colors.white.withOpacity(0.5))),
-          SizedBox(height: _S.of(context).s(8)),
-          Row(
-            children: [
-              Expanded(child: _EditablePhotoSlot(
-                label: 'CNIC Front',
-                icon: Icons.credit_card_rounded,
-                photoUrl: _user.cnicFront,
-                cnicOrId: _user.cnic ?? _user.id,
-                photoType: 'cnic_front',
-                onChanged: (url) => setState(() => _user = _user.copyWith(cnicFront: url)),
-              )),
-              SizedBox(width: _S.of(context).s(10)),
-              Expanded(child: _EditablePhotoSlot(
-                label: 'CNIC Back',
-                icon: Icons.credit_card_rounded,
-                photoUrl: _user.cnicBack,
-                cnicOrId: _user.cnic ?? _user.id,
-                photoType: 'cnic_back',
-                onChanged: (url) => setState(() => _user = _user.copyWith(cnicBack: url)),
-              )),
-            ],
+          SizedBox(height: _S.of(context).s(12)),
+
+          // ── Marriage-Seeking Person CNIC ──────────────────────────────────
+          _verificationSectionHeader(
+            title: 'Marriage Seeking Person CNIC',
+            docKeys: ['cnic_front', 'cnic_back'],
+            docName: 'Candidate CNIC',
+            hasDoc: (_user.cnicFront?.isNotEmpty ?? false) || (_user.cnicBack?.isNotEmpty ?? false),
           ),
-          SizedBox(height: _S.of(context).s(10)),
-          _certField(label: 'Education Document', url: _user.educationDocument, cnicOrId: _user.cnic ?? _user.id,
-            photoType: 'education_document', onChanged: (url) => setState(() => _user = _user.copyWith(educationDocument: url))),
+          SizedBox(height: _S.of(context).s(8)),
+          Row(children: [
+            Expanded(child: _EditablePhotoSlot(
+              label: 'CNIC Front', icon: Icons.credit_card_rounded,
+              photoUrl: _user.cnicFront, cnicOrId: _user.cnic ?? _user.id,
+              photoType: 'cnic_front',
+              onChanged: (url) => _onPhotoChanged('cnic_front', url, (u) => _user.copyWith(cnicFront: u)),
+            )),
+            SizedBox(width: _S.of(context).s(10)),
+            Expanded(child: _EditablePhotoSlot(
+              label: 'CNIC Back', icon: Icons.credit_card_rounded,
+              photoUrl: _user.cnicBack, cnicOrId: _user.cnic ?? _user.id,
+              photoType: 'cnic_back',
+              onChanged: (url) => _onPhotoChanged('cnic_back', url, (u) => _user.copyWith(cnicBack: u)),
+            )),
+          ]),
+
+          SizedBox(height: _S.of(context).s(14)),
+
+          // ── Most Recent Education Document ────────────────────────────────
+          _verificationSectionHeader(
+            title: 'Most Recent Education Document',
+            docKeys: ['education_document'],
+            docName: 'Education Document',
+            hasDoc: _user.educationDocument?.isNotEmpty ?? false,
+          ),
+          SizedBox(height: _S.of(context).s(8)),
+          _certField(
+            label: 'Education Document',
+            url: _user.educationDocument,
+            cnicOrId: _user.cnic ?? _user.id,
+            photoType: 'education_document',
+            onChanged: (url) => _onPhotoChanged('education_document', url, (u) => _user.copyWith(educationDocument: u)),
+          ),
+
           SizedBox(height: _S.of(context).s(6)),
-          Text('Parent / Guardian', style: TextStyle(fontSize: _S.of(context).f(11.5), fontWeight: FontWeight.w600,
-              color: Colors.white.withOpacity(0.5))),
-          SizedBox(height: _S.of(context).s(8)),
-          Row(
-            children: [
-              Expanded(child: _EditablePhotoSlot(
-                label: 'CNIC Front',
-                icon: Icons.credit_card_rounded,
-                photoUrl: _user.guardianCnicFront,
-                cnicOrId: _user.cnic ?? _user.id,
-                photoType: 'guardian_cnic_front',
-                onChanged: (url) => setState(() => _user = _user.copyWith(guardianCnicFront: url)),
-              )),
-              SizedBox(width: _S.of(context).s(10)),
-              Expanded(child: _EditablePhotoSlot(
-                label: 'CNIC Back',
-                icon: Icons.credit_card_rounded,
-                photoUrl: _user.guardianCnicBack,
-                cnicOrId: _user.cnic ?? _user.id,
-                photoType: 'guardian_cnic_back',
-                onChanged: (url) => setState(() => _user = _user.copyWith(guardianCnicBack: url)),
-              )),
-            ],
+
+          // ── Parent / Guardian CNIC ────────────────────────────────────────
+          _verificationSectionHeader(
+            title: 'Parent / Guardian CNIC',
+            docKeys: ['guardian_cnic_front', 'guardian_cnic_back'],
+            docName: 'Parent CNIC',
+            hasDoc: (_user.guardianCnicFront?.isNotEmpty ?? false) || (_user.guardianCnicBack?.isNotEmpty ?? false),
           ),
+          SizedBox(height: _S.of(context).s(8)),
+          Row(children: [
+            Expanded(child: _EditablePhotoSlot(
+              label: 'CNIC Front', icon: Icons.credit_card_rounded,
+              photoUrl: _user.guardianCnicFront, cnicOrId: _user.cnic ?? _user.id,
+              photoType: 'guardian_cnic_front',
+              onChanged: (url) => _onPhotoChanged('guardian_cnic_front', url, (u) => _user.copyWith(guardianCnicFront: u)),
+            )),
+            SizedBox(width: _S.of(context).s(10)),
+            Expanded(child: _EditablePhotoSlot(
+              label: 'CNIC Back', icon: Icons.credit_card_rounded,
+              photoUrl: _user.guardianCnicBack, cnicOrId: _user.cnic ?? _user.id,
+              photoType: 'guardian_cnic_back',
+              onChanged: (url) => _onPhotoChanged('guardian_cnic_back', url, (u) => _user.copyWith(guardianCnicBack: u)),
+            )),
+          ]),
+
           SizedBox(height: _S.of(context).s(4)),
 
           _mainHeader('Additional Information'),
@@ -847,6 +874,73 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
                     width: s.d(15), height: s.d(15)),
               ),
             ),
+            // Copy icon — puts the ready-made "your proposal is listed"
+            // WhatsApp message on the clipboard, with this profile's own
+            // link. Only for AI-uploaded proposals (the same AI_IMPORTED /
+            // ai_batch test the Users screen uses for its AI filter and
+            // long-press approve flow), since the "claim or remove" wording
+            // only makes sense for a profile the person never submitted
+            // themselves. Also hidden when the profile has no number yet,
+            // as the link would be broken.
+            if (_user.proposalNumber != null &&
+                (_user.adminNotes == 'AI_IMPORTED' || _user.submissionSource == 'ai_batch')) ...[
+              SizedBox(width: s.s(5)),
+              GestureDetector(
+                onTap: () {
+                  final message = 'Your rishta proposal is currently listed on Jor.\n\n'
+                      '\u{1F449} View Your Profile:\n'
+                      'https://joronline.com/profile/${_user.proposalNumber}\n\n'
+                      'Reply \u201Cclaim\u201D to manage your profile for free or \u201Cremove\u201D to remove it from Jor.';
+                  Clipboard.setData(ClipboardData(text: message));
+                  HapticFeedback.lightImpact();
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Message copied'),
+                    duration: Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ));
+                },
+                child: Container(
+                  padding: EdgeInsets.all(s.s(5)),
+                  decoration: BoxDecoration(color: kPurple.withOpacity(0.18), borderRadius: BorderRadius.circular(7)),
+                  child: Icon(Icons.copy_rounded, size: s.d(15), color: kPurple),
+                ),
+              ),
+            ],
+            // Copy icon for doc_pending profiles — "start your rishta search" message
+            // template, editable from the Content tab in app_settings.
+            if (_user.proposalNumber != null &&
+                _user.subscriptionStatus == SubscriptionStatus.docPending) ...[
+              SizedBox(width: s.s(5)),
+              GestureDetector(
+                onTap: () {
+                  final template = SupabaseService.instance.cachedSettings['pending_profile_message'] ?? '';
+                  final message = template.isNotEmpty
+                      ? template.replaceAll('[NUMBER]', '${_user.proposalNumber}')
+                      : 'Your marriage proposal is currently listed on Jor\n\n'
+                        '\u{1F517} View your profile:\n'
+                        'https://joronline.com/profile/${_user.proposalNumber}\n\n'
+                        'To start your rishta search and connect with families, please complete the verification process by logging in at:\n'
+                        '\u{1F449} https://joronline.com/login\n\n'
+                        'Or download our mobile app:\n'
+                        '\u{1F449} joronline.com/get-android\n\n'
+                        'For any questions, feel free to reply here.\n\n'
+                        'Jor Team\n'
+                        'joronline.com';
+                  Clipboard.setData(ClipboardData(text: message));
+                  HapticFeedback.lightImpact();
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Message copied'),
+                    duration: Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ));
+                },
+                child: Container(
+                  padding: EdgeInsets.all(s.s(5)),
+                  decoration: BoxDecoration(color: kAmber.withOpacity(0.18), borderRadius: BorderRadius.circular(7)),
+                  child: Icon(Icons.copy_rounded, size: s.d(15), color: kAmber),
+                ),
+              ),
+            ],
             SizedBox(width: s.s(6)),
             // Phone number right next to icons
             Flexible(child: Text(phone,
@@ -1252,6 +1346,333 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   // Handles both modes this screen already supports: in read-only View
   // mode, shows a tappable "View Certificate" link (matching _viewValue's
   // styling) when one exists and nothing at all when it doesn't; in Edit
+  // ── Section heading row: title left, dropdown + status right ─────────────
+  // Heading: "Marriage Seeking Person CNIC"   [dropdown ▾]   Approved ✓
+  Widget _verificationSectionHeader({
+    required String title,
+    required List<String> docKeys,
+    required String docName,
+    required bool hasDoc,
+  }) {
+    final s = _S.of(context);
+
+    // Derive status
+    final String status;
+    if (docKeys.every((k) => (_user.docVerification[k] ?? 'pending') == 'approved')) {
+      status = 'approved';
+    } else if (docKeys.any((k) => (_user.docVerification[k] ?? 'pending') == 'rejected')) {
+      status = 'rejected';
+    } else {
+      status = 'pending';
+    }
+
+    final Color statusColor = status == 'approved' ? kGreen
+        : status == 'rejected' ? kRose
+        : Colors.white.withOpacity(0.4);
+
+    final String statusLabel = status == 'approved' ? 'Approved'
+        : status == 'rejected' ? 'Rejected'
+        : 'Pending';
+
+    final IconData statusIcon = status == 'approved' ? Icons.verified_rounded
+        : status == 'rejected' ? Icons.cancel_rounded
+        : Icons.hourglass_empty_rounded;
+
+    // Layout: [Title] [▾]  ............  [Status]
+    return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      // Title + dropdown arrow tight together, no gap between them
+      Text(title, style: TextStyle(
+        fontSize: s.f(12.5), fontWeight: FontWeight.w700,
+        color: Colors.white.withOpacity(0.7))),
+            const Spacer(),
+      // Status + PopupMenuButton arrow — right side.
+      // With no document uploaded there is nothing to approve or reject, so
+      // neither the "Pending" label nor the dropdown arrow is shown.
+      if (!hasDoc)
+        const SizedBox.shrink()
+      else if (!widget.readOnly)
+        PopupMenuButton<String>(
+          color: const Color(0xFF1E1A33),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          onSelected: (val) => _onDocAction(val, docKeys, docName),
+          itemBuilder: (_) => [
+            PopupMenuItem(value: 'approved', child: Row(children: [
+              Icon(Icons.verified_rounded, color: kGreen, size: s.d(16)),
+              SizedBox(width: s.s(8)),
+              Text('Approve', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kGreen)),
+            ])),
+            PopupMenuItem(value: 'rejected', child: Row(children: [
+              Icon(Icons.cancel_rounded, color: kRose, size: s.d(16)),
+              SizedBox(width: s.s(8)),
+              Text('Reject', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kRose)),
+            ])),
+            PopupMenuItem(value: 'pending', child: Row(children: [
+              Icon(Icons.refresh_rounded, color: Colors.white38, size: s.d(16)),
+              SizedBox(width: s.s(8)),
+              Text('Clear', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w600, color: Colors.white54)),
+            ])),
+          ],
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(statusIcon, size: s.d(13), color: statusColor),
+            SizedBox(width: s.s(4)),
+            Text(statusLabel, style: TextStyle(
+              fontSize: s.f(12), fontWeight: FontWeight.w700, color: statusColor)),
+            SizedBox(width: s.s(2)),
+            Icon(Icons.keyboard_arrow_down_rounded,
+              size: s.d(16), color: Colors.white.withOpacity(0.45)),
+          ]),
+        )
+      else
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(statusIcon, size: s.d(13), color: statusColor),
+          SizedBox(width: s.s(4)),
+          Text(statusLabel, style: TextStyle(
+            fontSize: s.f(12), fontWeight: FontWeight.w700, color: statusColor)),
+        ]),
+    ]);
+  }
+
+  // ── Doc section status dropdown ─────────────────────────────────────────
+  // One dropdown for a CNIC pair (front+back share one decision) or a
+  // single doc. Shows current status in colour, options: Approve / Reject.
+  Widget _sectionDropdown(List<String> docKeys, String docName) {
+    if (widget.readOnly) return const SizedBox.shrink();
+    final s = _S.of(context);
+    // Derive current status for the section:
+    // approved = all keys approved; rejected = any key rejected; else pending
+    final String current;
+    if (docKeys.every((k) => (_user.docVerification[k] ?? 'pending') == 'approved')) {
+      current = 'approved';
+    } else if (docKeys.any((k) => (_user.docVerification[k] ?? 'pending') == 'rejected')) {
+      current = 'rejected';
+    } else {
+      current = 'pending';
+    }
+
+    final Color statusColor = current == 'approved' ? kGreen
+        : current == 'rejected' ? kRose
+        : Colors.white.withOpacity(0.4);
+    final IconData statusIcon = current == 'approved' ? Icons.verified_rounded
+        : current == 'rejected' ? Icons.cancel_rounded
+        : Icons.hourglass_empty_rounded;
+
+    return Padding(
+      padding: EdgeInsets.only(top: s.s(6), bottom: s.s(10)),
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(4)),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(s.s(10)),
+          border: Border.all(color: statusColor.withOpacity(0.4)),
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: current == 'pending' ? null : current,
+            hint: Row(children: [
+              Icon(statusIcon, size: s.d(14), color: statusColor),
+              SizedBox(width: s.s(6)),
+              Text('Pending Review', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w600, color: statusColor)),
+            ]),
+            isExpanded: true,
+            dropdownColor: const Color(0xFF1E1A33),
+            icon: Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white.withOpacity(0.4), size: s.d(18)),
+            items: [
+              DropdownMenuItem(value: 'approved', child: Row(children: [
+                Icon(Icons.verified_rounded, size: s.d(14), color: kGreen),
+                SizedBox(width: s.s(8)),
+                Text('Approve', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kGreen)),
+              ])),
+              DropdownMenuItem(value: 'rejected', child: Row(children: [
+                Icon(Icons.cancel_rounded, size: s.d(14), color: kRose),
+                SizedBox(width: s.s(8)),
+                Text('Reject', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kRose)),
+              ])),
+            ],
+            selectedItemBuilder: (_) => [
+              Row(children: [
+                Icon(Icons.verified_rounded, size: s.d(14), color: kGreen),
+                SizedBox(width: s.s(6)),
+                Text('Approved', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kGreen)),
+              ]),
+              Row(children: [
+                Icon(Icons.cancel_rounded, size: s.d(14), color: kRose),
+                SizedBox(width: s.s(6)),
+                Text('Rejected', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kRose)),
+              ]),
+            ],
+            onChanged: (val) async {
+              if (val == null) return;
+              final actionLabel = val == 'approved' ? 'Approve' : 'Reject';
+              final confirmed = await _confirmDialog('$actionLabel $docName?',
+                val == 'approved'
+                  ? 'This will mark $docName as approved.'
+                  : 'The user will be notified and asked to re-upload $docName.');
+              if (!confirmed) return;
+              for (final k in docKeys) {
+                await widget.svc.setDocVerificationStatus(_user.id, k, val);
+              }
+              final updatedDv = Map<String, String>.from(_user.docVerification)
+                ..addAll({for (final k in docKeys) k: val});
+              setState(() {
+                _user = _user.copyWith(docVerification: updatedDv);
+                // Sync _baseline so _hasChanges stays accurate — the dropdown
+                // saves directly (setDocVerificationStatus), not through _save(),
+                // so _baseline must be updated here to reflect what's now on disk.
+                // Without this, any other pending field change would also appear
+                // to include the doc-verification change (confusing) and the Save
+                // button may incorrectly activate or deactivate.
+                _baseline = _baseline.copyWith(docVerification: updatedDv);
+              });
+              if (val == 'rejected') {
+                SupabaseService.instance.notifyDocRejected(_user.id, docName);
+              }
+              // If user is doc_pending and all compulsory docs are now approved,
+              // upgrade subscription_status to 'active' so contacts unlock.
+              if (val == 'approved' && _user.subscriptionStatus == SubscriptionStatus.docPending) {
+                await SupabaseService.instance.checkAndUpgradeDocPending(_user.id, updatedDv);
+              }
+              // Let the admin know it saved immediately — the dropdown writes
+              // directly to the database (no Save button needed).
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('$docName marked as ${val == 'approved' ? 'Approved ✓' : 'Rejected'} — saved.'),
+                  duration: const Duration(seconds: 2),
+                  backgroundColor: val == 'approved' ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
+                ));
+              }
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Convenience wrappers kept for call-site compatibility
+  Widget _pairApprovalRow(List<String> docKeys, String docName) => _sectionDropdown(docKeys, docName);
+  Widget _docApprovalRow(String docKey, String docName) => _sectionDropdown([docKey], docName);
+
+  // ── Doc action bottom sheet (triggered by arrow tap) ────────────────────
+  /// Called when admin removes or replaces a verification photo.
+  ///
+  /// Removal has to clear the photo in THREE places or it comes back the next
+  /// time the screen is opened:
+  ///   1. proposal_photos          (fromJson prefers this over the column)
+  ///   2. cnic_verification_requests, status='pending'
+  ///                               (fetchSingleAdminUser merges from here
+  ///                                whenever the proposals column is null)
+  ///   3. the proposals column itself
+  ///
+  /// Order matters: (2) must happen BEFORE (3). Writing proposals first fires
+  /// the realtime UPDATE this screen listens to, which re-runs
+  /// _refreshCnicStatus() and merges the photo straight back in from the
+  /// still-untouched request row. The writes are also awaited rather than
+  /// fire-and-forget, so a failure is actually surfaced instead of vanishing.
+  Future<void> _onPhotoChanged(String photoType, String? url, AdminUser Function(String?) copyFn) async {
+    setState(() => _user = copyFn(url));
+    if (url != null) return;
+
+    // proposal_photos.photo_type is an enum with only these three values;
+    // guardian and education docs live on the proposals row only.
+    const inPhotoTable = {'profile', 'cnic_front', 'cnic_back'};
+    const colMap = {
+      'profile':             'profile_photo_url',
+      'cnic_front':          'cnic_front_url',
+      'cnic_back':           'cnic_back_url',
+      'guardian_cnic_front': 'guardian_cnic_front_url',
+      'guardian_cnic_back':  'guardian_cnic_back_url',
+      'education_document':  'education_document_url',
+    };
+    final col = colMap[photoType];
+    final client = SupabaseService.instance.client;
+    final id = _user.id;
+
+    _photoOpInFlight = true;
+    try {
+      if (inPhotoTable.contains(photoType)) {
+        await client.from('proposal_photos')
+            .delete()
+            .eq('proposal_id', id)
+            .eq('photo_type', photoType);
+      }
+
+      if (col != null) {
+        // (2) before (3) — see the note above.
+        await client.from('cnic_verification_requests')
+            .update({col: null})
+            .eq('proposal_id', id)
+            .eq('status', 'pending');
+
+        await client.from('proposals')
+            .update({col: null})
+            .eq('id', id);
+      }
+
+      // Clear doc_verification for this photo key — no photo means no status.
+      // The profile photo isn't a verification document, so it has no key.
+      if (photoType != 'profile') {
+        await widget.svc.setDocVerificationStatus(id, photoType, 'none');
+        if (mounted) {
+          final updated = Map<String, String>.from(_user.docVerification)..remove(photoType);
+          setState(() => _user = _user.copyWith(docVerification: updated));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not remove photo: $e')));
+        // Put the photo back on screen — the database still has it.
+        _photoOpInFlight = false;
+        await _refreshCnicStatus(force: true);
+        return;
+      }
+    } finally {
+      _photoOpInFlight = false;
+    }
+  }
+
+  Future<void> _onDocAction(String val, List<String> docKeys, String docName) async {
+    if (val == 'pending') {
+      for (final k in docKeys) await widget.svc.setDocVerificationStatus(_user.id, k, 'pending');
+      setState(() => _user = _user.copyWith(
+        docVerification: Map.from(_user.docVerification)..addAll({for (final k in docKeys) k: 'pending'})));
+      return;
+    }
+    final label = val == 'approved' ? 'Approve' : 'Reject';
+    final confirmed = await _confirmDialog('$label $docName?',
+      val == 'approved'
+        ? 'This will mark $docName as approved.'
+        : 'The user will be notified and asked to re-upload $docName.');
+    if (!confirmed) return;
+    for (final k in docKeys) await widget.svc.setDocVerificationStatus(_user.id, k, val);
+    setState(() => _user = _user.copyWith(
+      docVerification: Map.from(_user.docVerification)..addAll({for (final k in docKeys) k: val})));
+    if (val == 'rejected') SupabaseService.instance.notifyDocRejected(_user.id, docName);
+  }
+
+  // ── Confirmation dialog ───────────────────────────────────────────────────
+  Future<bool> _confirmDialog(String title, String message) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1830),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white)),
+        content: Text(message, style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.65), height: 1.5)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Confirm', style: TextStyle(color: kPurple, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
   // mode, reuses the exact same _EditablePhotoSlot already used for
   // profile/CNIC photos — same R2 upload path, just a different photoType.
   Widget _certField({required String label, required String? url, required String cnicOrId, required String photoType, required ValueChanged<String?> onChanged}) {

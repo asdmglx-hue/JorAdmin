@@ -60,7 +60,24 @@ class AdminVerificationScreen extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Column(children: [
           const ViewOnlyBanner(pageKey: AdminPageKeys.verification),
-          VerificationSettingsCard(onRefreshCallback: onRefreshCallback),
+          VerificationSettingsCard(
+            onRefreshCallback: onRefreshCallback,
+            title: 'Proposal Form Verification',
+          ),
+          const SizedBox(height: 16),
+          VerificationSettingsCard(
+            onRefreshCallback: onRefreshCallback,
+            title: 'Verify Now Verification',
+            keyCandidateCnic: 'verify_now_candidate_cnic',
+            keyLatestDegree:  'verify_now_latest_degree',
+            keyParentsCnic:   'verify_now_parents_cnic',
+            keyRequireAll:    'verify_now_require_all',
+            keyCandidateCnicCompulsory: 'verify_now_candidate_cnic_compulsory',
+            keyLatestDegreeCompulsory:  'verify_now_latest_degree_compulsory',
+            keyParentsCnicCompulsory:   'verify_now_parents_cnic_compulsory',
+          ),
+          const SizedBox(height: 16),
+          const VerificationBadgeCard(),
         ]),
       ),
     );
@@ -2051,7 +2068,7 @@ class _EditRequestsHeaderBadgeState extends State<_EditRequestsHeaderBadge> {
         verificationCount = (verificationData as List).length;
       } catch (_) {}
 
-      if (mounted) setState(() => _pendingCount = editCount + reportCount + verificationCount);
+      if (mounted) setState(() => _pendingCount = editCount + reportCount);
     } catch (_) {}
   }
 

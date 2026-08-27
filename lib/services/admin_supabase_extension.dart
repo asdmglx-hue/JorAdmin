@@ -48,7 +48,7 @@ const String _adminUserCols = 'id,proposal_number,name,age,gender,city,country,c
     'featured_credits_purchased,featured_credits_used,deleted_from,'
     'deletion_reason,admin_notes,discarded,suggested_info,profile_photo_url,'
     'cnic_front_url,cnic_back_url,guardian_cnic_front_url,guardian_cnic_back_url,'
-    'education_document_url,applied_coupon_code,profession_category,registration_allowed,'
+    'education_document_url,applied_coupon_code,profession_category,registration_allowed,ai_contacted,doc_verification,is_doc_verified,'
     'submission_source,last_seen_at,last_seen_source';
 
 extension AdminSupabaseExtension on SupabaseService {
@@ -114,6 +114,14 @@ extension AdminSupabaseExtension on SupabaseService {
   // action (approve/etc.) or after a realtime change notification, so
   // neither path ever needs to re-download the entire table just to learn
   // about one row.
+  /// Removes a photo row from proposal_photos so the removal is permanent.
+  Future<void> deleteProposalPhoto(String proposalId, String photoType) async {
+    await client.from('proposal_photos')
+      .delete()
+      .eq('proposal_id', proposalId)
+      .eq('photo_type', photoType);
+  }
+
   Future<AdminUser?> fetchSingleAdminUser(String id) async {
     final row = await client
         .from('proposals')

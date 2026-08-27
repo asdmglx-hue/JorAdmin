@@ -887,6 +887,38 @@ class SupabaseService extends ChangeNotifier {
     return List<Map<String, dynamic>>.from(res as List);
   }
 
+  // Update one document's verification status (approved / rejected / pending)
+  // and call the DB function to recompute is_doc_verified.
+  Future<void> setDocVerificationStatus(String userId, String docKey, String status) async {
+    // Merge the new status into the existing JSONB
+    await _client.rpc('set_doc_verification_status', params: {
+      'p_id': userId,
+      'p_key': docKey,
+      'p_status': status,
+    });
+  }
+
+  /// Fires the "Document Rejected" push so the user knows to re-upload.
+  /// doc_name should be "Candidate CNIC" / "Education Document" / "Parent CNIC".
+  void notifyDocRejected(String proposalId, String docName) {
+    _client.functions.invoke('notify-status-change', body: {
+      'type': 'doc_rejected',
+      'proposal_id': proposalId,
+      'doc_name': docName,
+    }).then((_) {
+      debugPrint('✅ doc_rejected push sent for proposalId=$proposalId doc=$docName');
+    }).catchError((e) {
+      debugPrint('⚠️  doc_rejected push failed for proposalId=$proposalId: $e');
+    });
+  }
+
+  // Admin-only tick on AI-imported cards (proposals.ai_contacted). Writes
+  // the single column and nothing else, so it can never disturb status,
+  // subscription or feed ordering.
+  Future<void> setAiContacted(String userId, bool value) async {
+    await _client.from('proposals').update({'ai_contacted': value}).eq('id', userId);
+  }
+
   Future<void> pauseUser(String userId) async {
     await _client.from('proposals').update({'status': 'paused'}).eq('id', userId);
     notifyListeners();
@@ -1060,8 +1092,24 @@ class SupabaseService extends ChangeNotifier {
       final now = DateTime.now().toUtc().toIso8601String();
       debugPrint('[APPROVE] userId=$userId has a real Google Play payment on record — '
           'publishing content only, leaving paid subscription data untouched.');
+      // Also check compulsory docs for Google Play path
+      final gplaySettings = await fetchAppSettings();
+      final gplayRow = await _client.from('proposals').select(
+        'cnic_front_url, cnic_back_url, education_document_url, guardian_cnic_front_url, guardian_cnic_back_url'
+      ).eq('id', userId).single();
+      bool gplayDocsMissing = false;
+      if (gplaySettings['verify_now_candidate_cnic'] != 'false' && gplaySettings['verify_now_candidate_cnic_compulsory'] != 'false') {
+        if ((gplayRow['cnic_front_url'] as String? ?? '').isEmpty || (gplayRow['cnic_back_url'] as String? ?? '').isEmpty) gplayDocsMissing = true;
+      }
+      if (gplaySettings['verify_now_latest_degree'] != 'false' && gplaySettings['verify_now_latest_degree_compulsory'] == 'true') {
+        if ((gplayRow['education_document_url'] as String? ?? '').isEmpty) gplayDocsMissing = true;
+      }
+      if (gplaySettings['verify_now_parents_cnic'] != 'false' && gplaySettings['verify_now_parents_cnic_compulsory'] != 'false') {
+        if ((gplayRow['guardian_cnic_front_url'] as String? ?? '').isEmpty || (gplayRow['guardian_cnic_back_url'] as String? ?? '').isEmpty) gplayDocsMissing = true;
+      }
       await _client.from('proposals').update({
         'status': 'active',
+        'subscription_status': gplayDocsMissing ? 'doc_pending' : null, // null = don't overwrite existing
         'approved_at': now,
         'applied_coupon_code': null,
         'coupon_discount_percent': null,
@@ -1170,12 +1218,46 @@ class SupabaseService extends ChangeNotifier {
     }
 
     final expiry = DateTime.now().toUtc().add(Duration(days: days)).toIso8601String();
-
     final now = DateTime.now().toUtc().toIso8601String();
+
+    // Check if compulsory docs are present — read live from app_settings so
+    // admin changes in the Verification tab take effect immediately.
+    // If any compulsory doc is missing, profile goes active (visible in feed)
+    // but subscription_status = 'doc_pending' so contacts stay locked until
+    // the user submits and admin approves the missing documents.
+    final proposalRow = await _client.from('proposals').select(
+      'cnic_front_url, cnic_back_url, education_document_url, guardian_cnic_front_url, guardian_cnic_back_url'
+    ).eq('id', userId).single();
+
+    bool compulsoryDocsMissing = false;
+    final cnicCompulsory    = settings['verify_now_candidate_cnic_compulsory'] != 'false';
+    final degreeCompulsory  = settings['verify_now_latest_degree_compulsory']  == 'true';
+    final parentsCompulsory = settings['verify_now_parents_cnic_compulsory']   != 'false';
+    final cnicShown    = settings['verify_now_candidate_cnic'] != 'false';
+    final degreeShown  = settings['verify_now_latest_degree']  != 'false';
+    final parentsShown = settings['verify_now_parents_cnic']   != 'false';
+
+    if (cnicShown && cnicCompulsory) {
+      final front = (proposalRow['cnic_front_url'] as String? ?? '').isNotEmpty;
+      final back  = (proposalRow['cnic_back_url']  as String? ?? '').isNotEmpty;
+      if (!front || !back) compulsoryDocsMissing = true;
+    }
+    if (degreeShown && degreeCompulsory) {
+      final degree = (proposalRow['education_document_url'] as String? ?? '').isNotEmpty;
+      if (!degree) compulsoryDocsMissing = true;
+    }
+    if (parentsShown && parentsCompulsory) {
+      final front = (proposalRow['guardian_cnic_front_url'] as String? ?? '').isNotEmpty;
+      final back  = (proposalRow['guardian_cnic_back_url']  as String? ?? '').isNotEmpty;
+      if (!front || !back) compulsoryDocsMissing = true;
+    }
+
+    debugPrint('[APPROVE] compulsoryDocsMissing=$compulsoryDocsMissing -> subscriptionStatus=${compulsoryDocsMissing ? 'doc_pending' : 'active'}');
+
     await _client.from('proposals').update({
       'status': 'active',
       'subscription_tier': 'basic',
-      'subscription_status': 'active',
+      'subscription_status': compulsoryDocsMissing ? 'doc_pending' : 'active',
       'amount_paid': price,
       'subscription_days': days,
       'subscription_expiry': expiry,
@@ -1186,7 +1268,9 @@ class SupabaseService extends ChangeNotifier {
     }).eq('id', userId);
 
     notifyListeners();
-    _notifyProfileApproved(userId);
+    // Only send profile_approved push when fully active —
+    // doc_pending users are not yet fully approved (missing compulsory docs)
+    if (!compulsoryDocsMissing) _notifyProfileApproved(userId);
   }
 
   Future<Map<String, dynamic>> renewSubscription(String userId) async {
@@ -1419,6 +1503,32 @@ class SupabaseService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_kCachedOccupationsKey, jsonEncode(grouped.map((k, v) => MapEntry(k, v))));
     } catch (_) {}
+  }
+
+  // Called after admin approves a doc for a doc_pending user.
+  // If all compulsory docs in the current settings are now approved,
+  // upgrade subscription_status to 'active' so the user's contacts unlock.
+  Future<void> checkAndUpgradeDocPending(String userId, Map<String, String> updatedDv) async {
+    final s = await fetchAppSettings();
+    const docMap = {
+      'candidate_cnic': ['cnic_front', 'cnic_back'],
+      'latest_degree':  ['education_document'],
+      'parents_cnic':   ['guardian_cnic_front', 'guardian_cnic_back'],
+    };
+    for (final entry in docMap.entries) {
+      final shown      = s['verify_now_${entry.key}'] != 'false';
+      final compulsory = s['verify_now_${entry.key}_compulsory'] != 'false';
+      if (!shown || !compulsory) continue;
+      final allApproved = entry.value.every((k) => updatedDv[k] == 'approved');
+      if (!allApproved) {
+        debugPrint('[DOC_PENDING] ${entry.key} not fully approved yet — staying doc_pending');
+        return;
+      }
+    }
+    // All compulsory docs approved — unlock contacts
+    debugPrint('[DOC_PENDING] all compulsory docs approved for userId=$userId — upgrading to active');
+    await _client.from('proposals').update({'subscription_status': 'active'}).eq('id', userId);
+    notifyListeners();
   }
 
   Future<Map<String, String>> fetchAppSettings() async {
