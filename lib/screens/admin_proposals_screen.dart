@@ -188,11 +188,20 @@ class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
                     itemBuilder: (_, i) {
                       final u = list[i];
                       if (_showApproved) {
-                        return _ApprovedCard(user: u, svc: widget.svc, onView: () async {
-                          await Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => AdminEditUserScreen(user: u, svc: widget.svc, readOnly: !canEdit)));
-                          widget.svc.notifyListeners();
-                        });
+                        return _ApprovedCard(
+                          user: u,
+                          svc: widget.svc,
+                          onView: () async {
+                            await Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => AdminEditUserScreen(user: u, svc: widget.svc, readOnly: true)));
+                            widget.svc.notifyListeners();
+                          },
+                          onEdit: () async {
+                            await Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => AdminEditUserScreen(user: u, svc: widget.svc, readOnly: !canEdit)));
+                            widget.svc.notifyListeners();
+                          },
+                        );
                       }
                       return _PendingCard(
                         user: u,
@@ -244,7 +253,8 @@ class _ApprovedCard extends StatelessWidget {
   final AdminUser user;
   final AdminService svc;
   final VoidCallback onView;
-  const _ApprovedCard({required this.user, required this.svc, required this.onView});
+  final VoidCallback onEdit;
+  const _ApprovedCard({required this.user, required this.svc, required this.onView, required this.onEdit});
 
   String _timeAgo(DateTime d) {
     final local = d.isUtc ? d.toLocal() : d;
@@ -338,8 +348,7 @@ class _ApprovedCard extends StatelessWidget {
                 ),
               ),
               Builder(builder: (ctx) => GestureDetector(
-                onTap: () => Navigator.push(ctx, MaterialPageRoute(
-                  builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: !AdminPerms.i.canEdit(AdminPageKeys.orders)))),
+                onTap: onView,
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
@@ -401,7 +410,7 @@ class _ApprovedCard extends StatelessWidget {
             label: 'Edit Profile',
             icon: Icons.edit_rounded,
             color: kPurple,
-            onTap: onView,
+            onTap: onEdit,
           ),
         ],
       ),
@@ -543,7 +552,7 @@ class _PendingCard extends StatelessWidget {
               ),
               Builder(builder: (ctx) => GestureDetector(
                 onTap: () => Navigator.push(ctx, MaterialPageRoute(
-                  builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: !AdminPerms.i.canEdit(AdminPageKeys.orders)))),
+                  builder: (_) => AdminEditUserScreen(user: user, svc: svc, readOnly: true))),
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
@@ -668,6 +677,10 @@ class _PendingCard extends StatelessWidget {
                       ),
                     );
                     if (approveAnyway != true) return;
+                    // Admin already confirmed intent via "Approve Anyway" —
+                    // skip the payment confirmation dialog and approve directly.
+                    svc.approveProposal(user.id);
+                    return;
                   }
                   // AI imported proposals: skip payment dialog, approve with 0 amount
                   if (user.adminNotes == 'AI_IMPORTED') {

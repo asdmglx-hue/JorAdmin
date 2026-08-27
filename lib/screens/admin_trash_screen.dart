@@ -56,17 +56,13 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
   // ── Affiliate trash support ───────────────────────────────────────────────
   List<Map<String, dynamic>> _deletedAffiliates = [];
   bool _loadingAffiliates = false;
-  List<Map<String, dynamic>> _deletionReasons = [];
-  bool _loadingReasons = false;
 
   @override
   void initState() {
     super.initState();
     if (widget.source == 'affiliates') {
       _loadDeletedAffiliates();
-    } else if (widget.source == 'users') {
-      _loadDeletionReasons();
-      // The users/orders view above already auto-refreshes via the
+      // The users/orders view auto-refreshes via the
       // ListenableBuilder(listenable: widget.svc) wrapping build() below.
       // The affiliates view reads from local state populated by a direct
       // Supabase query instead, so it needs its own realtime subscription.
@@ -88,17 +84,6 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
       await widget.svc.loadData();
     }
     if (mounted) setState(() => _refreshing = false);
-  }
-
-  Future<void> _loadDeletionReasons() async {
-    setState(() => _loadingReasons = true);
-    try {
-      final res = await SupabaseService.instance.client
-          .from('deletion_reasons')
-          .select()
-          .order('deleted_at', ascending: false);
-      if (mounted) setState(() { _deletionReasons = List<Map<String,dynamic>>.from(res); _loadingReasons = false; });
-    } catch (_) { if (mounted) setState(() => _loadingReasons = false); }
   }
 
   Future<void> _loadDeletedAffiliates() async {
@@ -224,50 +209,6 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
       listenable: widget.svc,
       builder: (_, __) {
         if (widget.source == 'affiliates') return _buildAffiliateTrash(s);
-
-        // Users trash: reads from deletion_reasons table (hard-deleted proposals
-        // whose reasons are kept for 3 days for admin review)
-        if (widget.source == 'users') {
-          if (_loadingReasons) return const Center(child: CircularProgressIndicator());
-          final q = _search.toLowerCase();
-          final reasons = q.isEmpty ? _deletionReasons : _deletionReasons.where((r) =>
-              (r['name'] as String? ?? '').toLowerCase().contains(q) ||
-              (r['cnic'] as String? ?? '').toLowerCase().contains(q)).toList();
-          if (reasons.isEmpty) return Center(child: Text('No deletion records', style: TextStyle(color: Colors.white38, fontSize: s.f(14))));
-          return ListView.builder(
-            padding: EdgeInsets.all(s.s(12)),
-            itemCount: reasons.length,
-            itemBuilder: (_, i) {
-              final r = reasons[i];
-              final deletedAt = r['deleted_at'] != null ? DateTime.tryParse(r['deleted_at'])?.toLocal() : null;
-              final timeAgo = deletedAt != null ? _timeAgoStr(deletedAt) : '';
-              return Container(
-                margin: EdgeInsets.only(bottom: s.s(10)),
-                padding: EdgeInsets.all(s.s(14)),
-                decoration: BoxDecoration(color: const Color(0xFF1E1A33), borderRadius: BorderRadius.circular(s.s(14))),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    Expanded(child: Text(r['name'] as String? ?? 'Unknown', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: s.f(14)))),
-                    Text(timeAgo, style: TextStyle(color: Colors.white38, fontSize: s.f(11))),
-                  ]),
-                  if (r['cnic'] != null) ...[
-                    SizedBox(height: s.s(2)),
-                    Text(r['cnic'] as String, style: TextStyle(color: Colors.white38, fontSize: s.f(11))),
-                  ],
-                  if (r['reason'] != null && (r['reason'] as String).isNotEmpty) ...[
-                    SizedBox(height: s.s(8)),
-                    Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.all(s.s(10)),
-                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(s.s(8))),
-                      child: Text('Reason: ${r['reason']}', style: TextStyle(color: Colors.white70, fontSize: s.f(12.5))),
-                    ),
-                  ],
-                ]),
-              );
-            },
-          );
-        }
 
         final allDeleted = widget.svc.users
             .where((u) => u.status == ProposalStatus.deleted && u.deletedFrom == widget.source)

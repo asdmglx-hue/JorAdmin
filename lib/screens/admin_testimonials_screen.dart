@@ -1200,9 +1200,14 @@ class MessageTemplatesCard extends StatefulWidget {
 }
 
 class _MessageTemplatesCardState extends State<MessageTemplatesCard> {
-  static const _kBg   = Color(0xFF16132A);
-  static const _kCard = Color(0xFF1E1A33);
+  // Same card background used by Stories/Data Management above it, so
+  // this card doesn't look like a slightly different shade in the stack.
+  static const _kCard = Color(0xFF16132A);
 
+  // Collapsed by default — same collapsible-card pattern used by the
+  // other sections on this tab (Stories, Data Management): tap the
+  // header to expand/collapse, chevron flips to show state.
+  bool _cardExpanded = false;
   bool _loading = true;
   bool _saving  = false;
   final _aiCtrl      = TextEditingController();
@@ -1268,37 +1273,70 @@ class _MessageTemplatesCardState extends State<MessageTemplatesCard> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(color: _kCard, borderRadius: BorderRadius.circular(16)),
-      padding: const EdgeInsets.all(16),
-      child: _loading
-          ? const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))
-          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Message Templates', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 4),
-              const Text('Use [NUMBER] as placeholder for profile number.', style: TextStyle(color: Colors.white38, fontSize: 12)),
-              const SizedBox(height: 16),
-              _label('AI Profile Message (purple copy icon)'),
-              const SizedBox(height: 6),
-              _field(_aiCtrl),
-              const SizedBox(height: 16),
-              _label('Pending Profile Message (amber copy icon)'),
-              const SizedBox(height: 6),
-              _field(_pendingCtrl),
-              const SizedBox(height: 16),
-              Align(
-                alignment: Alignment.centerRight,
-                child: GestureDetector(
-                  onTap: _saving ? null : _save,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                    decoration: BoxDecoration(color: kPurple, borderRadius: BorderRadius.circular(10)),
-                    child: _saving
-                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Text('Save Templates', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                  ),
-                ),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: Column(children: [
+        // Header — same collapsible pattern as Data Management: icon,
+        // title + subtitle, chevron. Tap anywhere to expand/collapse.
+        InkWell(
+          onTap: () => setState(() => _cardExpanded = !_cardExpanded),
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            child: Row(children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: kPurple.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+                child: const Icon(Icons.chat_bubble_outline_rounded, color: kPurple, size: 20),
               ),
+              const SizedBox(width: 12),
+              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Message Templates', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white)),
+                Text('AI Profile · Pending Profile', style: TextStyle(fontSize: 12, color: Colors.white38)),
+              ])),
+              Icon(_cardExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                  color: Colors.white38, size: 22),
             ]),
+          ),
+        ),
+
+        if (_cardExpanded) ...[
+          Divider(height: 1, color: Colors.white.withOpacity(0.07)),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: _loading
+                ? const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))
+                : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('Use [NUMBER] as placeholder for profile number.', style: TextStyle(color: Colors.white38, fontSize: 12)),
+                    const SizedBox(height: 16),
+                    _label('AI Profile Message (purple copy icon)'),
+                    const SizedBox(height: 6),
+                    _field(_aiCtrl),
+                    const SizedBox(height: 16),
+                    _label('Pending Profile Message (amber copy icon)'),
+                    const SizedBox(height: 6),
+                    _field(_pendingCtrl),
+                    const SizedBox(height: 16),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: GestureDetector(
+                        onTap: _saving ? null : _save,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                          decoration: BoxDecoration(color: kPurple, borderRadius: BorderRadius.circular(10)),
+                          child: _saving
+                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                              : const Text('Save Templates', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ),
+                  ]),
+          ),
+        ],
+      ]),
     );
   }
 

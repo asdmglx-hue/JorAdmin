@@ -813,7 +813,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
           // ── NOTES FROM APPLICANT ──
           const SizedBox(height: 8),
-          _multiField('Notes from Applicant', _adminNotesCtrl),
+          _multiField('Profile Manager', _adminNotesCtrl),
 
           const SizedBox(height: 40),
         ],
@@ -1206,10 +1206,10 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
         ]),
       ],
 
-      // ── Admin Notes ──
+      // ── Profile Manager ──
       if (u.adminNotes != null && u.adminNotes!.isNotEmpty) ...[
         SizedBox(height: s.s(16)),
-        Text('Notes from Applicant', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        Text('Profile Manager', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
         SizedBox(height: s.s(8)),
         Container(
           width: double.infinity,
@@ -1530,6 +1530,12 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               // upgrade subscription_status to 'active' so contacts unlock.
               if (val == 'approved' && _user.subscriptionStatus == SubscriptionStatus.docPending) {
                 await SupabaseService.instance.checkAndUpgradeDocPending(_user.id, updatedDv);
+                if (_compulsoryDocsApproved(updatedDv)) {
+                  setState(() {
+                    _user = _user.copyWith(subscriptionStatus: SubscriptionStatus.active);
+                    _baseline = _baseline.copyWith(subscriptionStatus: SubscriptionStatus.active);
+                  });
+                }
               }
               // Let the admin know it saved immediately — the dropdown writes
               // directly to the database (no Save button needed).
@@ -1644,12 +1650,46 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
         : 'The user will be notified and asked to re-upload $docName.');
     if (!confirmed) return;
     for (final k in docKeys) await widget.svc.setDocVerificationStatus(_user.id, k, val);
-    setState(() => _user = _user.copyWith(
-      docVerification: Map.from(_user.docVerification)..addAll({for (final k in docKeys) k: val})));
+    final updatedDv = Map<String, String>.from(_user.docVerification)
+      ..addAll({for (final k in docKeys) k: val});
+    setState(() => _user = _user.copyWith(docVerification: updatedDv));
     if (val == 'rejected') SupabaseService.instance.notifyDocRejected(_user.id, docName);
+    // If user is doc_pending and all compulsory docs are now approved,
+    // upgrade subscription_status to 'active' so contacts unlock.
+    if (val == 'approved' && _user.subscriptionStatus == SubscriptionStatus.docPending) {
+      await SupabaseService.instance.checkAndUpgradeDocPending(_user.id, updatedDv);
+      // Check if upgrade actually happened (all compulsory docs approved)
+      if (_compulsoryDocsApproved(updatedDv)) {
+        setState(() {
+          _user = _user.copyWith(subscriptionStatus: SubscriptionStatus.active);
+          _baseline = _baseline.copyWith(subscriptionStatus: SubscriptionStatus.active);
+        });
+      }
+    }
   }
 
   // ── Confirmation dialog ───────────────────────────────────────────────────
+  // Returns true if all compulsory doc sections are fully approved in [dv].
+  // Mirrors the top-level _compulsoryDocsApproved() logic from admin_users_screen
+  // but operates on a local map rather than an AdminUser — used to decide whether
+  // to flip the badge to Active after checkAndUpgradeDocPending succeeds.
+  bool _compulsoryDocsApproved(Map<String, String> dv) {
+    final s = SupabaseService.instance.cachedSettings;
+    const docMap = {
+      'candidate_cnic': ['cnic_front', 'cnic_back'],
+      'latest_degree':  ['education_document'],
+      'parents_cnic':   ['guardian_cnic_front', 'guardian_cnic_back'],
+    };
+    for (final entry in docMap.entries) {
+      final shown      = s['verify_now_${entry.key}'] != 'false';
+      final compulsory = s['verify_now_${entry.key}_compulsory'] != 'false';
+      if (!shown || !compulsory) continue;
+      final allApproved = entry.value.every((k) => dv[k] == 'approved');
+      if (!allApproved) return false;
+    }
+    return true;
+  }
+
   Future<bool> _confirmDialog(String title, String message) async {
     final result = await showDialog<bool>(
       context: context,
