@@ -33,8 +33,8 @@ List<String> _missingVerificationDocs(AdminUser user, Map<String, String> settin
     if (user.educationDocument == null || user.educationDocument!.isEmpty) missing.add('Education Document');
   }
   if (parentsShown && parentsCompulsory) {
-    if (user.guardianCnicFront == null || user.guardianCnicFront!.isEmpty) missing.add('Guardian CNIC Front');
-    if (user.guardianCnicBack  == null || user.guardianCnicBack!.isEmpty)  missing.add('Guardian CNIC Back');
+    if (user.guardianCnicFront == null || user.guardianCnicFront!.isEmpty) missing.add('Parent / Guardian CNIC Front');
+    if (user.guardianCnicBack  == null || user.guardianCnicBack!.isEmpty)  missing.add('Parent / Guardian CNIC Back');
   }
   return missing;
 }

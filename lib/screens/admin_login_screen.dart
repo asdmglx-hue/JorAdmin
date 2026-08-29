@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/theme.dart';
 import '../services/admin_service.dart';
+import '../services/biometric_service.dart';
 import '../services/fcm_service.dart';
 import 'admin_dashboard_screen.dart';
 
@@ -51,9 +52,6 @@ class _CnicFormatter extends TextInputFormatter {
 }
 
 // ── AdminLoginScreen ─────────────────────────────────────────────────────────
-//  The PIN keypad has been replaced by the CNIC + password that is assigned
-//  to each admin in Settings → Create Admin. The same credentials also decide
-//  which pages that admin can open, and whether they can edit them.
 class AdminLoginScreen extends StatefulWidget {
   final AdminService? adminService;
   const AdminLoginScreen({super.key, this.adminService});
@@ -72,13 +70,18 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
 
   bool _obscure = true;
   bool _loading = false;
+  bool _bioLoading = false;
   String? _error;
   late AnimationController _shakeCtrl;
   late Animation<double> _shakeAnim;
 
+  // Biometric state
+  bool _bioAvailable = false;
+  bool _bioEnabled   = false;
+
   int get _cnicDigits => _cnicCtrl.text.replaceAll('-', '').length;
   bool get _canSubmit =>
-      !_loading && _cnicDigits == 13 && _passCtrl.text.trim().isNotEmpty;
+      !_loading && !_bioLoading && _cnicDigits == 13 && _passCtrl.text.trim().isNotEmpty;
 
   @override
   void initState() {
@@ -89,7 +92,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     _shakeAnim = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(parent: _shakeCtrl, curve: Curves.elasticIn),
     );
-    _loadSavedCnic();
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _loadSavedCnic();
+    if (!kIsWeb) await _checkBiometrics();
   }
 
   Future<void> _loadSavedCnic() async {
@@ -101,6 +109,17 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     }
   }
 
+  Future<void> _checkBiometrics() async {
+    final available = await BiometricService.instance.isAvailable();
+    final enabled   = available && await BiometricService.instance.isEnabled();
+    if (!mounted) return;
+    setState(() {
+      _bioAvailable = available;
+      _bioEnabled   = enabled;
+    });
+    // Don't auto-prompt — let the user tap the fingerprint button themselves
+  }
+
   @override
   void dispose() {
     _cnicCtrl.dispose();
@@ -110,29 +129,78 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
     super.dispose();
   }
 
+  // ── Biometric login ───────────────────────────────────────────────────────
+
+  Future<void> _biometricLogin() async {
+    if (_bioLoading || _loading) return;
+    setState(() { _bioLoading = true; _error = null; });
+
+    final creds = await BiometricService.instance.authenticate();
+    if (!mounted) return;
+
+    if (creds == null) {
+      // User cancelled — just dismiss loader, let them type
+      setState(() => _bioLoading = false);
+      return;
+    }
+
+    // Fill fields so the admin can see what's being used
+    _cnicCtrl.text = creds.cnic;
+    _passCtrl.text = creds.password;
+
+    final result = await _svc.loginWithCredentials(creds.cnic, creds.password);
+    if (!mounted) return;
+
+    if (result == null) {
+      if (!kIsWeb) await FCMService.instance.saveAdminToken();
+      if (!mounted) return;
+      setState(() => _bioLoading = false);
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => AdminDashboardScreen(adminService: _svc)),
+      );
+      return;
+    }
+
+    // Saved credentials are wrong (password changed) — disable bio and ask to re-login
+    await BiometricService.instance.clearCredentials();
+    if (!mounted) return;
+    setState(() {
+      _bioLoading = false;
+      _bioEnabled  = false;
+      _passCtrl.clear();
+      _error = 'Saved credentials are outdated. Please log in with your password.';
+    });
+    _shakeCtrl.forward(from: 0);
+  }
+
+  // ── Password login ────────────────────────────────────────────────────────
+
   Future<void> _submit() async {
     if (!_canSubmit) return;
     FocusScope.of(context).unfocus();
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    // Capture values now before any async gap clears the controllers
+    final cnic     = _cnicCtrl.text;
+    final password = _passCtrl.text.trim();
+    setState(() { _loading = true; _error = null; });
 
-    final result =
-        await _svc.loginWithCredentials(_cnicCtrl.text, _passCtrl.text);
-
+    final result = await _svc.loginWithCredentials(cnic, password);
     if (!mounted) return;
 
     if (result == null) {
       if (!kIsWeb) await FCMService.instance.saveAdminToken();
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('admin_cnic', _cnicCtrl.text);
+      await prefs.setString('admin_cnic', cnic);
+
+      // Offer biometric setup if available but not yet enabled
+      if (!kIsWeb && _bioAvailable && !_bioEnabled) {
+        await _offerBiometricSetup(cnic, password);
+      }
+
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(
-          builder: (_) => AdminDashboardScreen(adminService: _svc),
-        ),
+        MaterialPageRoute(builder: (_) => AdminDashboardScreen(adminService: _svc)),
       );
       return;
     }
@@ -147,6 +215,45 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
       _passCtrl.clear();
     });
   }
+
+  Future<void> _offerBiometricSetup(String cnic, String password) async {
+    final s = _S.of(context);
+    final enable = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF16132A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(18))),
+        title: Row(children: [
+          Icon(Icons.fingerprint_rounded, color: kPurple, size: s.d(24)),
+          SizedBox(width: s.s(10)),
+          Text('Enable Fingerprint Login?',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: s.f(15))),
+        ]),
+        content: Text(
+          'Sign in faster next time using your fingerprint instead of typing your password.',
+          style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: s.f(13), height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Not Now', style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: s.f(13))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text('Enable', style: TextStyle(color: kPurple, fontWeight: FontWeight.w700, fontSize: s.f(13))),
+          ),
+        ],
+      ),
+    );
+
+    if (enable == true && mounted) {
+      await BiometricService.instance.saveCredentials(cnic, password);
+      setState(() => _bioEnabled = true);
+    }
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -206,6 +313,11 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                     _buildError(s),
                     SizedBox(height: s.s(6)),
                     _buildSubmit(s),
+                    // Fingerprint button — only shown if already set up
+                    if (!kIsWeb && _bioAvailable && _bioEnabled) ...[
+                      SizedBox(height: s.s(16)),
+                      _buildBiometricButton(s),
+                    ],
                     SizedBox(height: s.s(18)),
                     Text(
                       'Access is set by the main admin in Settings → Create Admin.',
@@ -355,6 +467,44 @@ class _AdminLoginScreenState extends State<AdminLoginScreen>
                       color: Colors.white.withOpacity(_canSubmit ? 1 : 0.6),
                       fontSize: s.f(15),
                       fontWeight: FontWeight.w800)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBiometricButton(_S s) {
+    return GestureDetector(
+      onTap: _bioLoading || _loading ? null : _biometricLogin,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: double.infinity,
+        height: s.d(52),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(s.s(14)),
+          border: Border.all(color: kPurple.withOpacity(_bioEnabled ? 0.35 : 0.15)),
+        ),
+        child: Center(
+          child: _bioLoading
+              ? SizedBox(
+                  width: s.d(20),
+                  height: s.d(20),
+                  child: CircularProgressIndicator(
+                      color: kPurple, strokeWidth: 2))
+              : Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.fingerprint_rounded,
+                      color: _bioEnabled ? kPurple : Colors.white.withOpacity(0.4),
+                      size: s.d(24)),
+                  SizedBox(width: s.s(8)),
+                  Text(
+                    _bioEnabled ? 'Sign in with Fingerprint' : 'Set Up Fingerprint Login',
+                    style: TextStyle(
+                      color: _bioEnabled ? kPurple : Colors.white.withOpacity(0.4),
+                      fontSize: s.f(14),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ]),
         ),
       ),
     );

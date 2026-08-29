@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/theme.dart';
 import '../services/supabase_service.dart';
@@ -801,28 +802,10 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
                 padding: EdgeInsets.symmetric(vertical: 20),
                 child: CircularProgressIndicator(strokeWidth: 2, color: kPurple)))
             : Column(children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8, top: 4),
-                  child: Text(
-                    'Toggle which verification sections appear in the proposal form across the user app and website.',
-                    style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.45), height: 1.5),
-                  ),
-                ),
-                Divider(height: 1, color: Colors.white.withOpacity(0.07)),
-                _row('Candidate CNIC', 'CNIC front & back of the marriage-seeking person', _candidateCnic,
+                _row('Parent / Guardian / Candidate CNIC', 'CNIC front & back of the marriage-seeking person', _candidateCnic,
                   (v) { setState(() => _candidateCnic = v); _toggle(_keyCandidateCnic, v); }),
                 if (_candidateCnic) _subRow('Compulsory', 'Must be uploaded before proceeding',
                   _candidateCnicCompulsory, (v) { setState(() => _candidateCnicCompulsory = v); _toggle(_keyCandidateCnicCompulsory, v); }),
-                Divider(height: 1, color: Colors.white.withOpacity(0.05)),
-                _row('Latest Degree', 'Most recent education document', _latestDegree,
-                  (v) { setState(() => _latestDegree = v); _toggle(_keyLatestDegree, v); }),
-                if (_latestDegree) _subRow('Compulsory', 'Must be uploaded before proceeding',
-                  _latestDegreeCompulsory, (v) { setState(() => _latestDegreeCompulsory = v); _toggle(_keyLatestDegreeCompulsory, v); }),
-                Divider(height: 1, color: Colors.white.withOpacity(0.05)),
-                _row('Parents / Guardian CNIC', 'CNIC front & back of parents or guardian', _parentsCnic,
-                  (v) { setState(() => _parentsCnic = v); _toggle(_keyParentsCnic, v); }),
-                if (_parentsCnic) _subRow('Compulsory', 'Must be uploaded before proceeding',
-                  _parentsCnicCompulsory, (v) { setState(() => _parentsCnicCompulsory = v); _toggle(_keyParentsCnicCompulsory, v); }),
 
               ]),
         ),
@@ -1290,7 +1273,7 @@ class _MessageTemplatesCardState extends State<MessageTemplatesCard> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(color: kPurple.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Icons.chat_bubble_outline_rounded, color: kPurple, size: 20),
+                child: SvgPicture.asset('assets/icons/whatsapp.svg', width: 20, height: 20, colorFilter: const ColorFilter.mode(kPurple, BlendMode.srcIn)),
               ),
               const SizedBox(width: 12),
               const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

@@ -69,12 +69,12 @@ class _AdminTrackingScreenState extends State<AdminTrackingScreen> {
 
   String _categoryFromKey(String key) {
     if (key.contains('profile_')) return 'Profile Photo';
-    if (key.contains('cnic_front') && key.contains('guardian')) return 'Guardian CNIC Front';
-    if (key.contains('cnic_back') && key.contains('guardian')) return 'Guardian CNIC Back';
-    if (key.contains('guardian_cnic_front')) return 'Guardian CNIC Front';
-    if (key.contains('guardian_cnic_back')) return 'Guardian CNIC Back';
-    if (key.contains('cnic_front')) return 'CNIC Front';
-    if (key.contains('cnic_back')) return 'CNIC Back';
+    if (key.contains('cnic_front') && key.contains('guardian')) return 'Parent / Guardian CNIC Front';
+    if (key.contains('cnic_back') && key.contains('guardian')) return 'Parent / Guardian CNIC Back';
+    if (key.contains('guardian_cnic_front')) return 'Parent / Guardian CNIC Front';
+    if (key.contains('guardian_cnic_back')) return 'Parent / Guardian CNIC Back';
+    if (key.contains('cnic_front')) return 'Parent / Guardian / Candidate CNIC Front';
+    if (key.contains('cnic_back')) return 'Parent / Guardian / Candidate CNIC Back';
     if (key.contains('degree_certificate')) return 'Degree Certificate';
     if (key.contains('education_document')) return 'Education Document';
     if (key.contains('proof')) return 'Payment Proof';

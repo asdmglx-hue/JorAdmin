@@ -62,12 +62,12 @@ class AdminVerificationScreen extends StatelessWidget {
           const ViewOnlyBanner(pageKey: AdminPageKeys.verification),
           VerificationSettingsCard(
             onRefreshCallback: onRefreshCallback,
-            title: 'Proposal Form Verification',
+            title: 'Signup Verification',
           ),
           const SizedBox(height: 16),
           VerificationSettingsCard(
             onRefreshCallback: onRefreshCallback,
-            title: 'Verify Now Verification',
+            title: 'Login Verification',
             keyCandidateCnic: 'verify_now_candidate_cnic',
             keyLatestDegree:  'verify_now_latest_degree',
             keyParentsCnic:   'verify_now_parents_cnic',
@@ -1691,7 +1691,10 @@ class _StatusBreakdown extends StatelessWidget {
   Widget build(BuildContext context) {
     final users = svc.users;
     final active   = users.where((u) => u.status == ProposalStatus.active && u.subscriptionStatus == SubscriptionStatus.active).length;
-    final inactive = users.where((u) => u.subscriptionStatus == SubscriptionStatus.expired).length;
+    final inactive = users.where((u) =>
+        u.subscriptionStatus == SubscriptionStatus.docPending ||
+        ((u.subscriptionStatus == SubscriptionStatus.expired || u.subscriptionStatus == SubscriptionStatus.inactive) &&
+         (u.adminNotes == 'AI_IMPORTED' || u.submissionSource == 'ai_batch'))).length;
     final paused   = users.where((u) => u.status == ProposalStatus.paused).length;
     final featured = users.where((u) => _hasFeaturedBoostToday(u)).length;
     final pending  = users.where((u) => u.status == ProposalStatus.pending).length;
@@ -1699,7 +1702,9 @@ class _StatusBreakdown extends StatelessWidget {
     final removed  = users.where((u) => u.status == ProposalStatus.deleted && u.deletedFrom == 'users').length;
     final affiliate = affiliateTotalCount;
 
-    final activeUsers = users.where((u) => u.status == ProposalStatus.active && u.subscriptionStatus == SubscriptionStatus.active);
+    // Use the same filter as the Active chip in the users screen (subscription
+    // status only) so the male/female counts here always match what that chip shows.
+    final activeUsers = users.where((u) => u.subscriptionStatus == SubscriptionStatus.active);
     final activeMale   = activeUsers.where((u) => u.gender.toLowerCase() == 'male').length;
     final activeFemale = activeUsers.where((u) => u.gender.toLowerCase() == 'female').length;
     // Count cities/countries using the exact same logic as the User Location

@@ -57,20 +57,29 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
   List<Map<String, dynamic>> _deletedAffiliates = [];
   bool _loadingAffiliates = false;
 
+  // ── Self-deleted users (deletion_reasons table) ───────────────────────────
+  List<Map<String, dynamic>> _deletionReasons = [];
+  bool _loadingDeletionReasons = false;
+
   @override
   void initState() {
     super.initState();
     if (widget.source == 'affiliates') {
       _loadDeletedAffiliates();
-      // The users/orders view auto-refreshes via the
-      // ListenableBuilder(listenable: widget.svc) wrapping build() below.
-      // The affiliates view reads from local state populated by a direct
-      // Supabase query instead, so it needs its own realtime subscription.
       _sync = subscribeAutoRefresh(
         client: _db.client,
         channelName: 'admin-sync-affiliate-trash',
         tables: const ['affiliates'],
         onChange: () { if (mounted) _loadDeletedAffiliates(); },
+      );
+    } else if (widget.source == 'users') {
+      // Also load self-deletion reasons for the users trash screen
+      _loadDeletionReasons();
+      _sync = subscribeAutoRefresh(
+        client: _db.client,
+        channelName: 'admin-sync-deletion-reasons',
+        tables: const ['deletion_reasons'],
+        onChange: () { if (mounted) _loadDeletionReasons(); },
       );
     }
   }
@@ -80,10 +89,36 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
     setState(() => _refreshing = true);
     if (widget.source == 'affiliates') {
       await _loadDeletedAffiliates();
+    } else if (widget.source == 'users') {
+      await Future.wait([widget.svc.loadData(), _loadDeletionReasons()]);
     } else {
       await widget.svc.loadData();
     }
     if (mounted) setState(() => _refreshing = false);
+  }
+
+  Future<void> _loadDeletionReasons() async {
+    setState(() => _loadingDeletionReasons = true);
+    try {
+      final res = await _db.client
+          .from('deletion_reasons')
+          .select()
+          .order('deleted_at', ascending: false);
+      if (mounted) setState(() {
+        _deletionReasons = List<Map<String, dynamic>>.from(res);
+        _loadingDeletionReasons = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingDeletionReasons = false);
+    }
+  }
+
+  Future<void> _deleteDeletionReason(String id) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'deleting records')) return;
+    try {
+      await _db.client.from('deletion_reasons').delete().eq('id', id);
+      _loadDeletionReasons();
+    } catch (_) {}
   }
 
   Future<void> _loadDeletedAffiliates() async {
@@ -306,7 +341,7 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
                 ),
               ),
               Expanded(
-                child: items.isEmpty
+                child: (items.isEmpty && _deletionReasons.isEmpty)
                     ? Center(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
@@ -318,10 +353,41 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
                           ],
                         ),
                       )
-                    : ListView.builder(
+                    : ListView(
                         padding: EdgeInsets.fromLTRB(s.s(16), s.s(8), s.s(16), s.s(20)),
-                        itemCount: items.length,
-                        itemBuilder: (_, i) => _TrashCard(user: items[i], svc: widget.svc),
+                        children: [
+                          // ── Soft-deleted (admin removed) ──────────────────
+                          if (items.isNotEmpty) ...[
+                            Padding(
+                              padding: EdgeInsets.only(bottom: s.s(8)),
+                              child: Text('Admin-Deleted (${items.length})',
+                                  style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700,
+                                      color: Colors.white.withOpacity(0.35), letterSpacing: 0.5)),
+                            ),
+                            ...items.map((u) => _TrashCard(user: u, svc: widget.svc)),
+                            SizedBox(height: s.s(8)),
+                          ],
+                          // ── Self-deleted (user removed themselves) ────────
+                          if (_deletionReasons.isNotEmpty || _loadingDeletionReasons) ...[
+                            Padding(
+                              padding: EdgeInsets.only(bottom: s.s(8), top: items.isNotEmpty ? s.s(8) : 0),
+                              child: Text('Self-Deleted (${_deletionReasons.length})',
+                                  style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700,
+                                      color: Colors.white.withOpacity(0.35), letterSpacing: 0.5)),
+                            ),
+                            if (_loadingDeletionReasons)
+                              const Center(child: Padding(
+                                padding: EdgeInsets.all(16),
+                                child: CircularProgressIndicator(color: kPurple),
+                              ))
+                            else
+                              ..._deletionReasons.map((r) => _DeletionReasonCard(
+                                    record: r,
+                                    s: s,
+                                    onDelete: () => _deleteDeletionReason(r['id'] as String),
+                                  )),
+                          ],
+                        ],
                       ),
               ),
             ],
@@ -700,6 +766,180 @@ class _TrashCard extends StatelessWidget {
             },
             child: Text('Delete Forever',
                 style: TextStyle(color: kRose, fontWeight: FontWeight.w700, fontSize: s.f(13))),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  _DeletionReasonCard — shows a record from the deletion_reasons table.
+//  These are users who deleted themselves via the app; the proposal row is
+//  hard-deleted so it no longer exists in proposals, but the reason they
+//  gave is kept here for up to 3 days for admin review.
+// ─────────────────────────────────────────────────────────────────────────────
+class _DeletionReasonCard extends StatelessWidget {
+  final Map<String, dynamic> record;
+  final _S s;
+  final VoidCallback onDelete;
+  const _DeletionReasonCard({required this.record, required this.s, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    final name    = (record['name']   ?? '').toString();
+    final gender  = (record['gender'] ?? '').toString();
+    final cnic    = (record['cnic']   ?? '').toString();
+    final num     = record['proposal_number'];
+    final reason  = (record['reason'] ?? '').toString();
+    final deletedAt = record['deleted_at'] != null
+        ? DateTime.tryParse(record['deleted_at'].toString())
+        : null;
+
+    return Container(
+      margin: EdgeInsets.only(bottom: s.s(10)),
+      padding: EdgeInsets.fromLTRB(s.s(14), s.s(12), s.s(14), s.s(12)),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16132A),
+        borderRadius: BorderRadius.circular(s.s(16)),
+        border: Border.all(color: kRose.withOpacity(0.12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Identity row ──────────────────────────────────────────────────
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: s.d(42), height: s.d(42),
+                decoration: BoxDecoration(
+                  color: kRose.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(s.s(12)),
+                ),
+                child: Center(
+                  child: Text(name.isNotEmpty ? name.substring(0, 1) : '?',
+                      style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w800,
+                          color: kRose.withOpacity(0.5))),
+                ),
+              ),
+              SizedBox(width: s.s(12)),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(top: s.s(2)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Flexible(
+                          child: Text(name,
+                              style: TextStyle(fontSize: s.f(14.5), fontWeight: FontWeight.w700,
+                                  color: Colors.white.withOpacity(0.75)),
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                        ),
+                        if (gender.isNotEmpty) ...[
+                          SizedBox(width: s.s(6)),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: s.s(6), vertical: s.s(2)),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.06),
+                              borderRadius: BorderRadius.circular(s.s(4)),
+                            ),
+                            child: Text(gender, style: TextStyle(fontSize: s.f(10),
+                                color: Colors.white.withOpacity(0.4))),
+                          ),
+                        ],
+                      ]),
+                      SizedBox(height: s.s(4)),
+                      Text(
+                        [
+                          if (num != null) '#$num',
+                          if (cnic.isNotEmpty) formatCnicDisplay(cnic),
+                        ].join('  ·  '),
+                        style: TextStyle(fontSize: s.f(12), color: Colors.white.withOpacity(0.35)),
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(width: s.s(8)),
+              // Delete the reason record
+              GestureDetector(
+                onTap: () => _confirmDelete(context),
+                child: Container(
+                  padding: EdgeInsets.all(s.s(7)),
+                  decoration: BoxDecoration(color: kRose.withOpacity(0.08), borderRadius: BorderRadius.circular(s.s(8))),
+                  child: Icon(Icons.delete_forever_rounded, size: s.d(16), color: kRose.withOpacity(0.7)),
+                ),
+              ),
+            ],
+          ),
+
+          SizedBox(height: s.s(10)),
+          Divider(height: 1, color: Colors.white.withOpacity(0.06)),
+          SizedBox(height: s.s(10)),
+
+          // ── Reason box ────────────────────────────────────────────────────
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(10)),
+            decoration: BoxDecoration(
+              color: kPurple.withOpacity(0.07),
+              borderRadius: BorderRadius.circular(s.s(10)),
+              border: Border.all(color: kPurple.withOpacity(0.18)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(Icons.comment_outlined, size: s.d(13), color: kPurple.withOpacity(0.7)),
+                  SizedBox(width: s.s(5)),
+                  Text('Reason for leaving',
+                      style: TextStyle(fontSize: s.f(11), fontWeight: FontWeight.w700,
+                          color: kPurple.withOpacity(0.7))),
+                  const Spacer(),
+                  if (deletedAt != null)
+                    Text(_timeAgoStr(deletedAt),
+                        style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.3))),
+                ]),
+                SizedBox(height: s.s(6)),
+                Text(
+                  reason.isNotEmpty ? reason : '(no reason provided)',
+                  style: TextStyle(fontSize: s.f(13), color: Colors.white.withOpacity(
+                      reason.isNotEmpty ? 0.75 : 0.3),
+                      fontStyle: reason.isNotEmpty ? FontStyle.normal : FontStyle.italic),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDelete(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF16132A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(18))),
+        title: Text('Remove Record?',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: s.f(15))),
+        content: Text('This will remove the deletion reason record for ${ (record['name'] ?? 'this user') }.',
+            style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: s.f(13))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: s.f(13))),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              HapticFeedback.heavyImpact();
+              onDelete();
+            },
+            child: Text('Remove', style: TextStyle(color: kRose, fontWeight: FontWeight.w700, fontSize: s.f(13))),
           ),
         ],
       ),

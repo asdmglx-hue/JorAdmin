@@ -137,7 +137,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     // for missing/unparseable data, not what real expired users have.
     // Inactive chip: users with doc_pending subscription (approved but compulsory docs missing)
     // Red-dot users (have submitted a compulsory doc pending review) sort to top
-    if (_filter == 'Pending') {
+    if (_filter == 'Inactive') {
       list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.docPending).toList();
       list.sort((a, b) {
         final aDot = _hasCompulsoryDocPending(a) ? 0 : 1;
@@ -412,7 +412,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 
   Widget _buildFilterRow() {
     final s = _S.of(context);
-    final filters = ['All', 'Active', 'Pending', 'Verified', 'Featured', 'Inactive (AI)', 'Paused', 'Expired', 'Refunded', 'Online'];
+    final filters = ['All', 'Active', 'Inactive', 'Verified', 'Featured', 'Inactive (AI)', 'Paused', 'Expired', 'Refunded', 'Online'];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -429,12 +429,12 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
           final verifiedCount = f == 'Verified'
               ? widget.svc.users.where((u) => _hasNonCompulsoryPending(u)).length
               : 0;
-          final pendingCount = f == 'Pending'
+          final pendingCount = f == 'Inactive'
               ? widget.svc.users.where((u) => _hasCompulsoryDocPending(u)).length
               : 0;
-          final showBadge = (f == 'Verified' && verifiedCount > 0) || (f == 'Pending' && pendingCount > 0);
+          final showBadge = (f == 'Verified' && verifiedCount > 0) || (f == 'Inactive' && pendingCount > 0);
           final badgeCount = f == 'Verified' ? verifiedCount : pendingCount;
-          final badgeColor = f == 'Pending' ? const Color(0xFF6B7280) : kGreen;
+          final badgeColor = f == 'Inactive' ? const Color(0xFF6B7280) : kGreen;
           return GestureDetector(
             onTap: () => setState(() { _filter = f; if (f != 'AI') _aiSort = 'All'; }),
             child: AnimatedContainer(
@@ -971,7 +971,7 @@ class _UserCardState extends State<_UserCard> {
 
   String _badgeLabel(AdminUser u) {
     if (u.subscriptionStatus == SubscriptionStatus.refunded) return 'Refunded';
-    if (u.subscriptionStatus == SubscriptionStatus.docPending) return 'Pending';
+    if (u.subscriptionStatus == SubscriptionStatus.docPending) return 'Inactive';
     if (u.status == ProposalStatus.paused) return 'Paused';
     if (u.status == ProposalStatus.approved) return 'Active';
     if (u.subscriptionStatus == SubscriptionStatus.expired || u.subscriptionStatus == SubscriptionStatus.inactive) return 'Inactive';

@@ -612,11 +612,11 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           _mainHeader('Verification'),
           SizedBox(height: _S.of(context).s(12)),
 
-          // ── Marriage-Seeking Person CNIC ──────────────────────────────────
+          // ── Parent / Guardian / Candidate CNIC ───────────────────────────
           _verificationSectionHeader(
-            title: 'Marriage Seeking Person CNIC',
+            title: 'PARENT / GUARDIAN / CANDIDATE CNIC',
             docKeys: ['cnic_front', 'cnic_back'],
-            docName: 'Candidate CNIC',
+            docName: 'Parent / Guardian / Candidate CNIC',
             hasDoc: (_user.cnicFront?.isNotEmpty ?? false) || (_user.cnicBack?.isNotEmpty ?? false),
           ),
           SizedBox(height: _S.of(context).s(8)),
@@ -633,50 +633,6 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               photoUrl: _user.cnicBack, cnicOrId: _user.cnic ?? _user.id,
               photoType: 'cnic_back',
               onChanged: (url) => _onPhotoChanged('cnic_back', url, (u) => _user.copyWith(cnicBack: u)),
-            )),
-          ]),
-
-          SizedBox(height: _S.of(context).s(14)),
-
-          // ── Most Recent Education Document ────────────────────────────────
-          _verificationSectionHeader(
-            title: 'Most Recent Education Document',
-            docKeys: ['education_document'],
-            docName: 'Education Document',
-            hasDoc: _user.educationDocument?.isNotEmpty ?? false,
-          ),
-          SizedBox(height: _S.of(context).s(8)),
-          _certField(
-            label: 'Education Document',
-            url: _user.educationDocument,
-            cnicOrId: _user.cnic ?? _user.id,
-            photoType: 'education_document',
-            onChanged: (url) => _onPhotoChanged('education_document', url, (u) => _user.copyWith(educationDocument: u)),
-          ),
-
-          SizedBox(height: _S.of(context).s(6)),
-
-          // ── Parent / Guardian CNIC ────────────────────────────────────────
-          _verificationSectionHeader(
-            title: 'Parent / Guardian CNIC',
-            docKeys: ['guardian_cnic_front', 'guardian_cnic_back'],
-            docName: 'Parent CNIC',
-            hasDoc: (_user.guardianCnicFront?.isNotEmpty ?? false) || (_user.guardianCnicBack?.isNotEmpty ?? false),
-          ),
-          SizedBox(height: _S.of(context).s(8)),
-          Row(children: [
-            Expanded(child: _EditablePhotoSlot(
-              label: 'CNIC Front', icon: Icons.credit_card_rounded,
-              photoUrl: _user.guardianCnicFront, cnicOrId: _user.cnic ?? _user.id,
-              photoType: 'guardian_cnic_front',
-              onChanged: (url) => _onPhotoChanged('guardian_cnic_front', url, (u) => _user.copyWith(guardianCnicFront: u)),
-            )),
-            SizedBox(width: _S.of(context).s(10)),
-            Expanded(child: _EditablePhotoSlot(
-              label: 'CNIC Back', icon: Icons.credit_card_rounded,
-              photoUrl: _user.guardianCnicBack, cnicOrId: _user.cnic ?? _user.id,
-              photoType: 'guardian_cnic_back',
-              onChanged: (url) => _onPhotoChanged('guardian_cnic_back', url, (u) => _user.copyWith(guardianCnicBack: u)),
             )),
           ]),
 
@@ -1175,34 +1131,12 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       // ── CNIC Photos ──
       if (u.cnicFront != null || u.cnicBack != null) ...[
         SizedBox(height: s.s(16)),
-        Text('Marriage-seeking Person', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
-        SizedBox(height: s.s(4)),
-        Text('CNIC', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        Text('PARENT / GUARDIAN / CANDIDATE CNIC', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
         SizedBox(height: s.s(8)),
         Row(children: [
           if (u.cnicFront != null) Expanded(child: _AdminPhotoSlot(label: 'Front', icon: Icons.credit_card_rounded, photoUrl: u.cnicFront)),
           if (u.cnicFront != null && u.cnicBack != null) SizedBox(width: s.s(10)),
           if (u.cnicBack != null) Expanded(child: _AdminPhotoSlot(label: 'Back', icon: Icons.credit_card_rounded, photoUrl: u.cnicBack)),
-        ]),
-      ],
-
-      // ── Education Document ──
-      if (u.educationDocument != null) ...[
-        SizedBox(height: s.s(16)),
-        Text('Education Document', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
-        SizedBox(height: s.s(8)),
-        Row(children: [Expanded(child: _AdminPhotoSlot(label: 'Document', icon: Icons.description_outlined, photoUrl: u.educationDocument))]),
-      ],
-
-      // ── Guardian CNIC Photos ──
-      if (u.guardianCnicFront != null || u.guardianCnicBack != null) ...[
-        SizedBox(height: s.s(16)),
-        Text('Parent / Guardian CNIC', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
-        SizedBox(height: s.s(8)),
-        Row(children: [
-          if (u.guardianCnicFront != null) Expanded(child: _AdminPhotoSlot(label: 'Front', icon: Icons.credit_card_rounded, photoUrl: u.guardianCnicFront)),
-          if (u.guardianCnicFront != null && u.guardianCnicBack != null) SizedBox(width: s.s(10)),
-          if (u.guardianCnicBack != null) Expanded(child: _AdminPhotoSlot(label: 'Back', icon: Icons.credit_card_rounded, photoUrl: u.guardianCnicBack)),
         ]),
       ],
 
@@ -1347,7 +1281,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   // mode, shows a tappable "View Certificate" link (matching _viewValue's
   // styling) when one exists and nothing at all when it doesn't; in Edit
   // ── Section heading row: title left, dropdown + status right ─────────────
-  // Heading: "Marriage Seeking Person CNIC"   [dropdown ▾]   Approved ✓
+  // Heading: "PARENT / GUARDIAN / CANDIDATE CNIC"   [dropdown ▾]   Approved ✓
   Widget _verificationSectionHeader({
     required String title,
     required List<String> docKeys,
