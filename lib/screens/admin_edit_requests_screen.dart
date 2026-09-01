@@ -1075,7 +1075,7 @@ String _formatValue(String key, dynamic value) {
 String _fieldLabel(String key) {
   const labels = {
     'name': 'Name', 'age': 'Age', 'city': 'City', 'country': 'Country',
-    'contact_phone': 'Phone', 'contact_phone_2': 'Phone 2',
+    'contact_phone': 'Phone', 'contact_phone_2': 'Phone 2', 'contact_person': 'Contact Person', 'contact_person_2': 'Contact Person (2nd)',
     'about': 'About', 'looking_for': 'Looking For',
     'profession': 'Occupation', 'education': 'Education',
     'degree_title': 'Degree', 'institute': 'Institute',
@@ -1128,7 +1128,7 @@ const _kFieldOrder = <String>[
   'home_type', 'location', 'house_size', 'has_car', 'car_name',
   'has_other_property', 'other_property',
   // Contact
-  'contact_phone', 'contact_phone_2',
+  'contact_phone', 'contact_person', 'contact_phone_2', 'contact_person_2',
 ];
 
 const _kFieldSection = <String, String>{
@@ -1151,7 +1151,7 @@ const _kFieldSection = <String, String>{
   'home_type': 'Property & Assets', 'location': 'Property & Assets', 'house_size': 'Property & Assets',
   'has_car': 'Property & Assets', 'car_name': 'Property & Assets',
   'has_other_property': 'Property & Assets', 'other_property': 'Property & Assets',
-  'contact_phone': 'Contact', 'contact_phone_2': 'Contact',
+  'contact_phone': 'Contact', 'contact_phone_2': 'Contact', 'contact_person': 'Contact', 'contact_person_2': 'Contact',
 };
 
 /// Sorts fields into the same order as the Edit Profile screen, section by

@@ -399,7 +399,8 @@ class _ApprovedCard extends StatelessWidget {
             ],
           ),
           SizedBox(height: _S.of(context).s(12)),
-          _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
+          _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone +
+              (user.contactPerson != null && user.contactPerson!.isNotEmpty ? '  ·  ${user.contactPerson}' : '')),
           _DetailRow(
             icon: Icons.calendar_today_rounded,
             label: 'Approved ${_timeAgo(user.subscriptionStart ?? user.postedAt)}'
@@ -603,7 +604,8 @@ class _PendingCard extends StatelessWidget {
             ],
           ),
           SizedBox(height: _S.of(context).s(12)),
-          _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone),
+          _DetailRow(icon: Icons.phone_rounded, label: user.contactPhone +
+              (user.contactPerson != null && user.contactPerson!.isNotEmpty ? '  ·  ${user.contactPerson}' : '')),
           _DetailRow(
             icon: Icons.calendar_today_rounded,
             label: 'Submitted ${_timeAgo(user.postedAt)}'

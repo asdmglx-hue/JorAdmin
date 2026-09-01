@@ -249,6 +249,8 @@ class AdminUser {
   final String? about;
   final String contactPhone;
   final String? contactPhone2;
+  final String? contactPerson;
+  final String? contactPerson2;
 
   static String formatPhone(String raw) {
     final trimmed = raw.trim();
@@ -353,7 +355,7 @@ class AdminUser {
     this.sisters = 0, this.brothers = 0, this.homeType, this.houseSize,
     this.location, this.disabilityDetails, this.hasKids, this.hasSiblings,
     this.hasCar, this.hasOtherProperty, this.otherProperty, this.carName, this.hasGenerator, this.hasSolar, this.hasServant,
-    this.lookingFor, this.about, required this.contactPhone, this.contactPhone2,
+    this.lookingFor, this.about, required this.contactPhone, this.contactPhone2, this.contactPerson, this.contactPerson2,
     this.phoneVerified = false, this.emailVerified = false, this.cnicVerified = false,
     this.cnic, this.password, this.smokes, this.drinks, this.monthlyIncome, this.hasDisability,
     this.physicallyActive, required this.postedAt,
@@ -476,6 +478,8 @@ class AdminUser {
       lookingFor: json['looking_for'] as String?, about: json['about'] as String?,
       contactPhone: (json['contact_phone'] as String?) ?? '',
       contactPhone2: json['contact_phone_2'] as String?,
+      contactPerson: json['contact_person'] as String?,
+      contactPerson2: json['contact_person_2'] as String?,
       phoneVerified: json['phone_verified'] as bool? ?? false,
       emailVerified: json['email_verified'] as bool? ?? false,
       cnicVerified: json['cnic_verified'] as bool? ?? false,
@@ -541,6 +545,8 @@ class AdminUser {
     'has_kids': hasKids, 'has_siblings': hasSiblings,
     'has_disability': hasDisability == null ? null : hasDisability == 'Yes',
     'looking_for': lookingFor, 'about': about, 'contact_phone': contactPhone,
+    if (contactPerson != null) 'contact_person': contactPerson,
+    if (contactPerson2 != null) 'contact_person_2': contactPerson2,
     'monthly_income': monthlyIncome,
     if (contactPhone2 != null) 'contact_phone_2': contactPhone2,
     if (contactPhone2 == null || contactPhone2!.isEmpty) 'contact_phone_2': null,
@@ -587,7 +593,7 @@ class AdminUser {
     Object? fatherAlive = _unset, Object? motherAlive = _unset, Object? fatherOccupation = _unset,
     Object? motherOccupation = _unset, int? sisters, int? brothers, Object? homeType = _unset, Object? houseSize = _unset,
     Object? hasCar = _unset, Object? hasOtherProperty = _unset, Object? otherProperty = _unset, Object? carName = _unset, Object? location = _unset, Object? country = _unset, bool? hasGenerator, bool? hasSolar, bool? hasServant,
-    Object? lookingFor = _unset, Object? about = _unset, String? contactPhone, String? contactPhone2, bool? phoneVerified,
+    Object? lookingFor = _unset, Object? about = _unset, String? contactPhone, String? contactPhone2, String? contactPerson, String? contactPerson2, bool? phoneVerified,
     bool? emailVerified, bool? cnicVerified, Object? cnic = _unset, Object? smokes = _unset, bool? drinks,
     Object? monthlyIncome = _unset, Object? hasDisability = _unset, Object? physicallyActive = _unset, String? disabilityDetails,
     bool? hasKids, Object? hasSiblings = _unset,
@@ -626,7 +632,7 @@ class AdminUser {
     country: country is _Unset ? this.country : country as String?,
     hasGenerator: hasGenerator ?? this.hasGenerator, hasSolar: hasSolar ?? this.hasSolar,
     hasServant: hasServant ?? this.hasServant, lookingFor: lookingFor is _Unset ? this.lookingFor : lookingFor as String?,
-    about: about is _Unset ? this.about : about as String?, contactPhone: contactPhone ?? this.contactPhone, contactPhone2: contactPhone2 ?? this.contactPhone2,
+    about: about is _Unset ? this.about : about as String?, contactPhone: contactPhone ?? this.contactPhone, contactPhone2: contactPhone2 ?? this.contactPhone2, contactPerson: contactPerson ?? this.contactPerson, contactPerson2: contactPerson2 ?? this.contactPerson2,
     phoneVerified: phoneVerified ?? this.phoneVerified, emailVerified: emailVerified ?? this.emailVerified,
     cnicVerified: cnicVerified ?? this.cnicVerified, cnic: cnic is _Unset ? this.cnic : cnic as String?, password: password ?? this.password,
     smokes: smokes is _Unset ? this.smokes : smokes as bool?, drinks: drinks ?? this.drinks,

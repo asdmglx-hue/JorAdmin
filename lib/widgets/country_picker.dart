@@ -470,3 +470,161 @@ class _CountryPickerSheetState extends State<_CountryPickerSheet> {
     );
   }
 }
+
+// ── kCountriesGrouped ─────────────────────────────────────────────────────────
+Map<String, List<String>> get kCountriesGrouped {
+  final map = <String, List<String>>{};
+  for (final c in CountryCode.all) {
+    if (c.name == 'Pakistan') continue;
+    final key = c.name[0].toUpperCase();
+    map.putIfAbsent(key, () => []).add(c.name);
+  }
+  return Map.fromEntries(map.entries.toList()..sort((a, b) => a.key.compareTo(b.key)));
+}
+
+// ── SearchableGroupedDropdown ─────────────────────────────────────────────────
+class _S {
+  final double scale;
+  const _S(this.scale);
+  double f(double size) => size * scale;
+  double s(double size) => size * scale;
+  double d(double size) => size * scale;
+  static _S of(BuildContext context) {
+    final w = MediaQuery.of(context).size.width;
+    final scale = (w / 390.0).clamp(0.72, 1.0);
+    return _S(scale);
+  }
+}
+
+class _PI extends StatelessWidget {
+  final String label; final bool selected; final VoidCallback onTap;
+  const _PI({required this.label, required this.selected, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    final s = _S.of(context);
+    return GestureDetector(onTap: onTap,
+      child: Container(color: selected ? kPurpleLight : Colors.transparent,
+        padding: EdgeInsets.symmetric(horizontal: s.s(20), vertical: s.s(13)),
+        child: Row(children: [
+          Expanded(child: Text(label, style: TextStyle(fontSize: s.f(14), color: selected ? kPurple : kInk, fontWeight: selected ? FontWeight.w700 : FontWeight.w500))),
+          if (selected) Icon(Icons.check_rounded, size: s.d(18), color: kPurple),
+        ])));
+  }
+}
+
+class AdminSearchableCountryDropdown extends StatefulWidget {
+  final String label;
+  final String? value;
+  final ValueChanged<String?> onChanged;
+  final IconData? icon;
+  const AdminSearchableCountryDropdown({super.key, required this.label, this.value, required this.onChanged, this.icon});
+  @override State<AdminSearchableCountryDropdown> createState() => _ASCDState();
+}
+class _ASCDState extends State<AdminSearchableCountryDropdown> {
+  void _open() {
+    final groups = kCountriesGrouped;
+    showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: Colors.transparent, useSafeArea: true,
+      builder: (ctx) => _AdminCountryPickerSheet(title: widget.label, groups: groups, selected: widget.value,
+        onSelect: (v) { widget.onChanged(v); Navigator.pop(ctx); },
+        onClear: () { widget.onChanged(null); Navigator.pop(ctx); }));
+  }
+  @override
+  Widget build(BuildContext context) {
+    final s = _S.of(context);
+    final has = widget.value != null && widget.value!.isNotEmpty;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(widget.label, style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+      SizedBox(height: s.s(5)),
+      GestureDetector(onTap: _open,
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: s.s(12), vertical: s.s(12)),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(s.s(10)),
+            border: Border.all(color: Colors.white.withOpacity(0.1)),
+          ),
+          child: Row(children: [
+            if (widget.icon != null) ...[Icon(widget.icon, size: s.d(16), color: Colors.white38), SizedBox(width: s.s(8))],
+            Expanded(child: Text(
+              has ? widget.value! : 'Select country...',
+              style: TextStyle(fontSize: s.f(13.5), color: has ? Colors.white : Colors.white38, fontWeight: has ? FontWeight.w500 : FontWeight.w400),
+            )),
+            Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white38, size: s.d(20)),
+          ]),
+        ),
+      ),
+    ]);
+  }
+}
+
+class _AdminCountryPickerSheet extends StatefulWidget {
+  final String title; final Map<String, List<String>> groups;
+  final String? selected; final ValueChanged<String> onSelect; final VoidCallback onClear;
+  const _AdminCountryPickerSheet({required this.title, required this.groups, this.selected, required this.onSelect, required this.onClear});
+  @override State<_AdminCountryPickerSheet> createState() => _ACSState();
+}
+class _ACSState extends State<_AdminCountryPickerSheet> {
+  String _q = ''; final _c = TextEditingController();
+  Map<String, List<String>> get _f {
+    if (_q.isEmpty) return widget.groups;
+    final q = _q.toLowerCase(); final r = <String, List<String>>{};
+    for (final e in widget.groups.entries) {
+      final m = e.value.where((v) => v.toLowerCase().contains(q)).toList();
+      if (m.isNotEmpty) r[e.key] = m;
+    }
+    return r;
+  }
+  @override void dispose() { _c.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) {
+    final s = _S.of(context);
+    final f = _f;
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.88,
+      decoration: const BoxDecoration(color: Color(0xFF1E1A33), borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      child: Column(children: [
+        SizedBox(height: s.s(10)),
+        Container(width: s.d(40), height: s.d(4), decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(s.s(2)))),
+        Padding(padding: EdgeInsets.fromLTRB(s.s(20), s.s(14), s.s(20), 0), child: Row(children: [
+          Text('Select ${widget.title}', style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w800, color: Colors.white)),
+          const Spacer(),
+          if (widget.selected != null) GestureDetector(onTap: widget.onClear, child: Text('Clear', style: TextStyle(fontSize: s.f(13), color: kRose, fontWeight: FontWeight.w600))),
+        ])),
+        SizedBox(height: s.s(12)),
+        Padding(padding: EdgeInsets.symmetric(horizontal: s.s(16)),
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: s.s(14), vertical: s.s(2)),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.07), borderRadius: BorderRadius.circular(s.s(14)), border: Border.all(color: Colors.white.withOpacity(0.1))),
+            child: Row(children: [
+              Icon(Icons.search_rounded, size: s.d(20), color: Colors.white38), SizedBox(width: s.s(8)),
+              Expanded(child: TextField(controller: _c, onChanged: (v) => setState(() => _q = v),
+                style: TextStyle(fontSize: s.f(14), color: Colors.white),
+                decoration: InputDecoration(hintText: 'Search country...', hintStyle: TextStyle(color: Colors.white38, fontSize: s.f(14)), border: InputBorder.none, isDense: true, contentPadding: EdgeInsets.symmetric(vertical: s.s(12))))),
+              if (_q.isNotEmpty) GestureDetector(onTap: () { _c.clear(); setState(() => _q = ''); }, child: Icon(Icons.close_rounded, size: s.d(18), color: Colors.white38)),
+            ]),
+          ),
+        ),
+        SizedBox(height: s.s(8)),
+        Divider(height: 1, color: Colors.white.withOpacity(0.1)),
+        Expanded(child: f.isEmpty
+          ? Center(child: Text('No results', style: TextStyle(color: Colors.white38, fontSize: s.f(14))))
+          : ListView(padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + s.s(40)), children: [
+              for (final e in f.entries) ...[
+                Padding(padding: EdgeInsets.fromLTRB(s.s(20), s.s(16), s.s(20), s.s(6)),
+                  child: Text(e.key, style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w800, color: kPurple.withOpacity(0.7), letterSpacing: 0.5))),
+                for (final o in e.value)
+                  GestureDetector(onTap: () => widget.onSelect(o),
+                    child: Container(
+                      color: widget.selected == o ? kPurple.withOpacity(0.15) : Colors.transparent,
+                      padding: EdgeInsets.symmetric(horizontal: s.s(20), vertical: s.s(13)),
+                      child: Row(children: [
+                        Expanded(child: Text(o, style: TextStyle(fontSize: s.f(14), color: widget.selected == o ? Colors.white : Colors.white70, fontWeight: widget.selected == o ? FontWeight.w700 : FontWeight.w400))),
+                        if (widget.selected == o) Icon(Icons.check_rounded, size: s.d(18), color: kPurple),
+                      ]),
+                    )),
+              ],
+            ])),
+      ]),
+    );
+  }
+}

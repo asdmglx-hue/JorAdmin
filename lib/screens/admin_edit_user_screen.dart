@@ -646,7 +646,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               _user.hasSiblings != null)
             _subHeader('Family'),
           if (!widget.readOnly || (_user.familyType != null && _user.familyType!.isNotEmpty))
-            _drop('Family Type', _user.familyType ?? '', ['Joint family', 'Separated Family'],
+            _drop('Family Type', _user.familyType ?? '', ['Joint family', 'Separate Family'],
                 (v) => setState(() => _user = _user.copyWith(familyType: v.isEmpty ? null : v))),
           if (!widget.readOnly || _user.fatherAlive != null || _user.motherAlive != null)
             _row([

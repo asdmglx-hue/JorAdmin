@@ -41,7 +41,7 @@ const String _adminUserCols = 'id,proposal_number,name,age,gender,city,country,c
     'sisters,brothers,home_type,house_size,location,disability_details,'
     'has_kids,has_siblings,has_car,car_name,has_other_property,other_property,'
     'has_generator,has_solar,has_servant,looking_for,about,contact_phone,'
-    'contact_phone_2,phone_verified,email_verified,cnic_verified,cnic,'
+    'contact_phone_2,contact_person,contact_person_2,phone_verified,email_verified,cnic_verified,cnic,'
     'password,smokes,drinks,monthly_income,has_disability,physically_active,'
     'posted_at,updated_at,status,subscription_tier,subscription_status,'
     'subscription_start,subscription_expiry,amount_paid,'

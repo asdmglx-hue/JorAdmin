@@ -738,7 +738,7 @@ class _State extends State<AdminWhatsAppImportScreen> {
         _dd('Monthly Income', _monthlyIncome, _kIncomes, (v) => setState(() => _monthlyIncome = v)),
 
         _sec('Family'),
-        _row2(_dd('Family Type', _familyType, const ['Joint family', 'Separated Family'], (v) => setState(() => _familyType = v)),
+        _row2(_dd('Family Type', _familyType, const ['Joint family', 'Separate Family'], (v) => setState(() => _familyType = v)),
               const SizedBox()),
         _row2(_dd('Father', _fatherAlive, _kParent, (v) => setState(() => _fatherAlive = v)),
               _tf('Father Occupation', _fatherOccCtrl)),

@@ -802,10 +802,18 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
                 padding: EdgeInsets.symmetric(vertical: 20),
                 child: CircularProgressIndicator(strokeWidth: 2, color: kPurple)))
             : Column(children: [
-                _row('Parent / Guardian / Candidate CNIC', 'CNIC front & back of the marriage-seeking person', _candidateCnic,
+                _row('Candidate CNIC', 'CNIC front & back of the marriage-seeking person', _candidateCnic,
                   (v) { setState(() => _candidateCnic = v); _toggle(_keyCandidateCnic, v); }),
                 if (_candidateCnic) _subRow('Compulsory', 'Must be uploaded before proceeding',
                   _candidateCnicCompulsory, (v) { setState(() => _candidateCnicCompulsory = v); _toggle(_keyCandidateCnicCompulsory, v); }),
+                _row('Education Document', 'Latest degree or certificate of the marriage-seeking person', _latestDegree,
+                  (v) { setState(() => _latestDegree = v); _toggle(_keyLatestDegree, v); }),
+                if (_latestDegree) _subRow('Compulsory', 'Must be uploaded before proceeding',
+                  _latestDegreeCompulsory, (v) { setState(() => _latestDegreeCompulsory = v); _toggle(_keyLatestDegreeCompulsory, v); }),
+                _row('Parents / Guardian CNIC', 'CNIC front & back of the parent or guardian submitting this profile', _parentsCnic,
+                  (v) { setState(() => _parentsCnic = v); _toggle(_keyParentsCnic, v); }),
+                if (_parentsCnic) _subRow('Compulsory', 'Must be uploaded before proceeding',
+                  _parentsCnicCompulsory, (v) { setState(() => _parentsCnicCompulsory = v); _toggle(_keyParentsCnicCompulsory, v); }),
 
               ]),
         ),

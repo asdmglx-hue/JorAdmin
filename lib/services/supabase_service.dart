@@ -1509,6 +1509,14 @@ class SupabaseService extends ChangeNotifier {
   // If all compulsory docs in the current settings are now approved,
   // upgrade subscription_status to 'active' so the user's contacts unlock.
   Future<void> checkAndUpgradeDocPending(String userId, Map<String, String> updatedDv) async {
+    // Only auto-upgrade if the profile is already approved (status = active).
+    // If still pending in Orders tab, admin must click Approve — doc approval alone should not activate.
+    final row = await _client.from('proposals').select('status').eq('id', userId).single();
+    final profileStatus = row['status'] as String? ?? '';
+    if (profileStatus != 'active') {
+      debugPrint('[DOC_PENDING] profile status=$profileStatus — not yet approved in Orders, skipping auto-upgrade');
+      return;
+    }
     final s = await fetchAppSettings();
     const docMap = {
       'candidate_cnic': ['cnic_front', 'cnic_back'],
@@ -1525,7 +1533,7 @@ class SupabaseService extends ChangeNotifier {
         return;
       }
     }
-    // All compulsory docs approved — unlock contacts
+    // All compulsory docs approved AND profile already active — unlock contacts
     debugPrint('[DOC_PENDING] all compulsory docs approved for userId=$userId — upgrading to active');
     await _client.from('proposals').update({'subscription_status': 'active'}).eq('id', userId);
     notifyListeners();

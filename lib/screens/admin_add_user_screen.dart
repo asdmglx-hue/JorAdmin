@@ -376,7 +376,7 @@ class _AdminAddUserScreenState extends State<AdminAddUserScreen> {
 
           // ── FAMILY ──
           _subHeader('Family'),
-          _drop('Family Type', _familyType, ['Joint family', 'Separated Family'], (v) => setState(() => _familyType = v)),
+          _drop('Family Type', _familyType, ['Joint family', 'Separate Family'], (v) => setState(() => _familyType = v)),
           _row([
             _drop('Father', _fatherAlive, ['Alive', 'Deceased'], (v) => setState(() => _fatherAlive = v)),
             _drop('Mother', _motherAlive, ['Alive', 'Deceased'], (v) => setState(() => _motherAlive = v)),
