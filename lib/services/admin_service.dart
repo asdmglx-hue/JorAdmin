@@ -327,7 +327,7 @@ class AdminService extends ChangeNotifier {
   }
 
   int get pendingProposals =>
-      _users.where((u) => u.status == ProposalStatus.pending).length;
+      _users.where((u) => u.status == ProposalStatus.pending && !u.isOrderArchived).length;
 
   // "All Time Visitors" = every unique device that's ever opened the app
   // (app_visitors, tracked by trackAppVisit() on launch) — a genuinely
@@ -434,6 +434,24 @@ class AdminService extends ChangeNotifier {
       // Revert optimistic change on failure
       final i = _users.indexWhere((u) => u.id == userId);
       if (i != -1) { notifyListeners(); }
+    }
+  }
+
+  Future<void> setOrderArchived(String userId, bool value) async {
+    final idx = _users.indexWhere((u) => u.id == userId);
+    final previous = idx == -1 ? null : _users[idx].isOrderArchived;
+    if (idx != -1) {
+      _users[idx] = _users[idx].copyWith(isOrderArchived: value);
+      notifyListeners();
+    }
+    try {
+      await _db.setOrderArchived(userId, value);
+    } catch (_) {
+      final i = _users.indexWhere((u) => u.id == userId);
+      if (i != -1 && previous != null) {
+        _users[i] = _users[i].copyWith(isOrderArchived: previous);
+        notifyListeners();
+      }
     }
   }
 

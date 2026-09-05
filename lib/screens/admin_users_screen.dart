@@ -164,6 +164,11 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     if (_filter == 'AI' && _aiSort == 'Permitted') list = list.where((u) => u.registrationAllowed).toList();
     if (_filter == 'AI' && _aiSort == 'Not Permitted') list = list.where((u) => !u.registrationAllowed).toList();
     if (_filter == 'Refunded') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.refunded).toList();
+    // Renew chip: users who uploaded a renewal payment screenshot (pending review)
+    if (_filter == 'Renew') list = list.where((u) =>
+        u.paymentProofUrl != null && u.paymentProofUrl!.isNotEmpty &&
+        u.paymentProofStatus == 'pending' &&
+        u.paymentProofType == 'renewal').toList();
     // Verified chip: two groups —
     // 1. Red-dot users: compulsory docs approved, non-compulsory doc pending review
     // 2. Already verified: is_doc_verified = true (badge already granted)
@@ -412,7 +417,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 
   Widget _buildFilterRow() {
     final s = _S.of(context);
-    final filters = ['All', 'Active', 'Inactive', 'Verified', 'Featured', 'Inactive (AI)', 'Paused', 'Expired', 'Refunded', 'Online'];
+    final filters = ['All', 'Active', 'Inactive', 'Verified', 'Featured', 'Inactive (AI)', 'Paused', 'Expired', 'Refunded', 'Online', 'Renew'];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -425,16 +430,27 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
         itemBuilder: (_, i) {
           final f = filters[i];
           final sel = _filter == f;
-          // Badge counts for Verified and Inactive chips
+          // Badge counts for Verified, Inactive, Pay Now and Renew chips
           final verifiedCount = f == 'Verified'
               ? widget.svc.users.where((u) => _hasNonCompulsoryPending(u)).length
               : 0;
           final pendingCount = f == 'Inactive'
               ? widget.svc.users.where((u) => _hasCompulsoryDocPending(u)).length
               : 0;
-          final showBadge = (f == 'Verified' && verifiedCount > 0) || (f == 'Inactive' && pendingCount > 0);
-          final badgeCount = f == 'Verified' ? verifiedCount : pendingCount;
-          final badgeColor = f == 'Inactive' ? const Color(0xFF6B7280) : kGreen;
+          final renewCount = f == 'Renew'
+              ? widget.svc.users.where((u) =>
+                  u.paymentProofUrl != null && u.paymentProofUrl!.isNotEmpty &&
+                  u.paymentProofStatus == 'pending' && u.paymentProofType == 'renewal').length
+              : 0;
+          final showBadge = (f == 'Verified' && verifiedCount > 0) ||
+              (f == 'Inactive' && pendingCount > 0) ||
+              (f == 'Renew' && renewCount > 0);
+          final badgeCount = f == 'Verified' ? verifiedCount
+              : f == 'Renew' ? renewCount
+              : pendingCount;
+          final badgeColor = f == 'Inactive' ? const Color(0xFF6B7280)
+              : f == 'Renew' ? Colors.orange
+              : kGreen;
           return GestureDetector(
             onTap: () => setState(() { _filter = f; if (f != 'AI') _aiSort = 'All'; }),
             child: AnimatedContainer(
@@ -615,118 +631,124 @@ class _UserCardState extends State<_UserCard> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Flexible(
-                            child: Text(user.name,
+                          Row(children: [
+                            Flexible(child: Text(user.name,
                               style: TextStyle(fontSize: s.f(14), fontWeight: FontWeight.w700, color: Colors.white),
-                              overflow: TextOverflow.ellipsis),
-                          ),
-                          if (_badgeLabel(user).isNotEmpty) ...[
-                            SizedBox(width: s.s(6)),
-                            Container(
-                              padding: EdgeInsets.symmetric(horizontal: s.s(7), vertical: s.s(2)),
-                              decoration: BoxDecoration(color: _badgeColor(user).withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(7))),
-                              child: Text(_badgeLabel(user), style: TextStyle(fontSize: s.f(10), fontWeight: FontWeight.w700, color: _badgeColor(user))),
-                            ),
-                          ],
-                          if (user.adminNotes == 'AI_IMPORTED') ...[
-                            SizedBox(width: s.s(4)),
-                            Container(
-                              padding: EdgeInsets.symmetric(horizontal: s.s(7), vertical: s.s(2)),
-                              decoration: BoxDecoration(color: kRose.withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(7))),
-                              child: Text('Not Approved', style: TextStyle(fontSize: s.f(10), fontWeight: FontWeight.w700, color: kRose)),
-                            ),
-                            SizedBox(width: s.s(4)),
-                            Container(
-                              padding: EdgeInsets.symmetric(horizontal: s.s(6), vertical: s.s(2)),
-                              decoration: BoxDecoration(
-                                color: kPurple.withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(s.s(7)),
+                              overflow: TextOverflow.ellipsis)),
+                            if (user.lastSeenAt != null) ...[
+                              SizedBox(width: s.s(6)),
+                              _LastSeenText(lastSeen: user.lastSeenAt!, source: user.lastSeenSource),
+                            ],
+                            if (user.adminNotes == 'AI_IMPORTED') ...[
+                              SizedBox(width: s.s(8)),
+                              GestureDetector(
+                                onTap: () {
+                                  if (!AdminPerms.i.guardEdit(AdminPageKeys.users)) return;
+                                  HapticFeedback.selectionClick();
+                                  svc.setAiContacted(user.id, !user.aiContacted);
+                                },
+                                child: Container(
+                                  width: s.d(16), height: s.d(16),
+                                  decoration: BoxDecoration(
+                                    color: user.aiContacted ? kGreen : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(s.s(4)),
+                                    border: Border.all(
+                                      color: user.aiContacted ? kGreen : Colors.white.withOpacity(0.3),
+                                      width: 1.4,
+                                    ),
+                                  ),
+                                  child: user.aiContacted
+                                      ? Icon(Icons.check_rounded, size: s.d(12), color: Colors.white)
+                                      : null,
+                                ),
                               ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
+                            ],
+                          ]),
+                          SizedBox(height: s.s(5)),
+                          Wrap(spacing: s.s(5), runSpacing: s.s(4), children: [
+                            if (_badgeLabel(user).isNotEmpty)
+                              Container(
+                                padding: EdgeInsets.symmetric(horizontal: s.s(7), vertical: s.s(2)),
+                                decoration: BoxDecoration(color: _badgeColor(user).withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(7))),
+                                child: Text(_badgeLabel(user), style: TextStyle(fontSize: s.f(10), fontWeight: FontWeight.w700, color: _badgeColor(user))),
+                              ),
+                            if (user.isDocVerified)
+                              Container(
+                                padding: EdgeInsets.symmetric(horizontal: s.s(7), vertical: s.s(2)),
+                                decoration: BoxDecoration(color: kGreen.withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(7))),
+                                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                  Icon(Icons.done, size: s.d(9), color: kGreen),
+                                  SizedBox(width: s.s(3)),
+                                  Text('Verified', style: TextStyle(fontSize: s.f(10), fontWeight: FontWeight.w700, color: kGreen)),
+                                ]),
+                              ),
+                            if (hasFeaturedBoostToday(user))
+                              Container(
+                                padding: EdgeInsets.symmetric(horizontal: s.s(7), vertical: s.s(2)),
+                                decoration: BoxDecoration(color: kAmber.withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(7))),
+                                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                  Icon(Icons.bolt, size: s.d(9), color: kAmber),
+                                  SizedBox(width: s.s(3)),
+                                  Text('Featured', style: TextStyle(fontSize: s.f(10), fontWeight: FontWeight.w700, color: kAmber)),
+                                ]),
+                              ),
+                            if (user.adminNotes == 'AI_IMPORTED') ...[
+                              Container(
+                                padding: EdgeInsets.symmetric(horizontal: s.s(7), vertical: s.s(2)),
+                                decoration: BoxDecoration(color: kPurple.withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(7))),
+                                child: Row(mainAxisSize: MainAxisSize.min, children: [
                                   Icon(Icons.auto_awesome, size: s.d(9), color: kPurple),
                                   SizedBox(width: s.s(3)),
                                   Text('AI', style: TextStyle(fontSize: s.f(10), fontWeight: FontWeight.w700, color: kPurple)),
-                                ],
+                                ]),
                               ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      SizedBox(height: s.s(3)),
-                      Row(
-                        children: [
-                          Text(
-                            user.proposalNumber != null ? '#${user.proposalNumber}' : '—',
-                            style: TextStyle(fontSize: s.f(11), fontWeight: FontWeight.w600,
-                              color: Colors.white.withOpacity(0.45)),
-                          ),
-                          // Plain tick box, AI cards only — one tap marks this
-                          // profile as done (green tick), another tap clears
-                          // it. No label, no dialog, no confirmation; the value
-                          // is saved to proposals.ai_contacted.
-                          if (user.adminNotes == 'AI_IMPORTED') ...[
-                            SizedBox(width: s.s(6)),
-                            GestureDetector(
-                              onTap: () {
-                                if (!AdminPerms.i.guardEdit(AdminPageKeys.users)) return;
-                                HapticFeedback.selectionClick();
-                                svc.setAiContacted(user.id, !user.aiContacted);
-                              },
-                              child: Container(
-                                width: s.d(16), height: s.d(16),
-                                decoration: BoxDecoration(
-                                  color: user.aiContacted ? kGreen : Colors.transparent,
-                                  borderRadius: BorderRadius.circular(s.s(4)),
-                                  border: Border.all(
-                                    color: user.aiContacted ? kGreen : Colors.white.withOpacity(0.3),
-                                    width: 1.4,
-                                  ),
-                                ),
-                                child: user.aiContacted
-                                    ? Icon(Icons.check_rounded, size: s.d(12), color: Colors.white)
-                                    : null,
+                              Container(
+                                padding: EdgeInsets.symmetric(horizontal: s.s(7), vertical: s.s(2)),
+                                decoration: BoxDecoration(color: kRose.withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(7))),
+                                child: Text('Not Approved', style: TextStyle(fontSize: s.f(10), fontWeight: FontWeight.w700, color: kRose)),
                               ),
-                            ),
-                          ],
-                          if (user.lastSeenAt != null) ...[
-                            Text('  •  ', style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.25))),
-                            _LastSeenText(lastSeen: user.lastSeenAt!, source: user.lastSeenSource),
-                          ],
+                            ],
+                          ]),
                         ],
                       ),
                     ],
                   ),
                 ),
                 SizedBox(width: s.s(8)),
-                Padding(
-                  padding: EdgeInsets.only(top: s.s(2)),
-                  child: GestureDetector(
+                GestureDetector(
                     onTap: onView,
-                    child: Stack(clipBehavior: Clip.none, children: [
-                      Container(
-                        width: s.d(28), height: s.d(28),
-                        decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(8))),
-                        child: Icon(Icons.remove_red_eye_outlined, size: s.d(16), color: Colors.white.withOpacity(0.5)),
-                      ),
-                      if (_hasNonCompulsoryPending(user) || _hasCompulsoryDocPending(user))
-                        Positioned(
-                          top: -2, right: -2,
-                          child: Container(
-                            width: s.d(8), height: s.d(8),
-                            decoration: BoxDecoration(
-                              color: kRose, shape: BoxShape.circle,
-                              border: Border.all(color: const Color(0xFF16132A), width: 1.5),
+                    child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      if (user.proposalNumber != null) ...[
+                        Padding(
+                          padding: EdgeInsets.only(top: s.s(2)),
+                          child: Text('#${user.proposalNumber}',
+                            style: TextStyle(fontSize: s.f(11), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.4))),
+                        ),
+                        SizedBox(width: s.s(5)),
+                      ],
+                      Stack(clipBehavior: Clip.none, children: [
+                        Container(
+                          width: s.d(28), height: s.d(28),
+                          decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(8))),
+                          child: Icon(Icons.remove_red_eye_outlined, size: s.d(16), color: Colors.white.withOpacity(0.5)),
+                        ),
+                        if (_hasNonCompulsoryPending(user) || _hasCompulsoryDocPending(user))
+                          Positioned(
+                            top: -2, right: -2,
+                            child: Container(
+                              width: s.d(8), height: s.d(8),
+                              decoration: BoxDecoration(
+                                color: kRose, shape: BoxShape.circle,
+                                border: Border.all(color: const Color(0xFF16132A), width: 1.5),
+                              ),
                             ),
                           ),
-                        ),
+                      ]),
                     ]),
                   ),
-                ),
               ],
             ),
           ),
@@ -1084,7 +1106,7 @@ class _UserCardState extends State<_UserCard> {
         Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
         const SizedBox(height: 16),
         ListTile(
-          leading: const Icon(Icons.check_circle_rounded, color: kGreen),
+          leading: const Icon(Icons.done, color: kGreen),
           title: const Text('Approve Profile', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
           subtitle: Text('Requires CNIC, password, and expiry to be set first',
             style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 11.5)),
@@ -1144,7 +1166,7 @@ class _UserCardState extends State<_UserCard> {
           backgroundColor: const Color(0xFF16132A),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Row(children: [
-            Icon(Icons.check_circle_rounded, color: kGreen, size: 20),
+            Icon(Icons.done, color: kGreen, size: 20),
             const SizedBox(width: 8),
             const Text('Approve Profile', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
           ]),

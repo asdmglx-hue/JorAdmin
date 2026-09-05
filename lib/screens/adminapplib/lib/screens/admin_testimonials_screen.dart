@@ -693,12 +693,8 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
   bool _parentsCnicCompulsory   = true;
   bool _badgeEnabled            = true;
 
-  static const _keySectionLabel   = 'verify_now_section_label';
-  static const _keyEducationLabel = 'verify_now_education_label';
-  static const _keyParentsLabel   = 'verify_now_parents_label';
-  final _sectionLabelController   = TextEditingController();
-  final _educationLabelController = TextEditingController();
-  final _parentsLabelController   = TextEditingController();
+  static const _keySectionLabel = 'verify_now_section_label';
+  final _sectionLabelController = TextEditingController();
   bool _savingLabel = false;
 
   String get _keyCandidateCnic           => widget.keyCandidateCnic;
@@ -730,9 +726,7 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
         _latestDegreeCompulsory  = (map[_keyLatestDegreeCompulsory]  ?? 'false') == 'true';
         _parentsCnicCompulsory   = (map[_keyParentsCnicCompulsory]   ?? 'true')  != 'false';
         _badgeEnabled            = (map[_keyBadgeEnabled]            ?? 'true')  != 'false';
-        _sectionLabelController.text   = map[_keySectionLabel]   ?? 'PARENT / GUARDIAN / CANDIDATE';
-        _educationLabelController.text = map[_keyEducationLabel] ?? 'Education Document';
-        _parentsLabelController.text   = map[_keyParentsLabel]   ?? 'Parents / Guardian CNIC';
+        _sectionLabelController.text = map[_keySectionLabel] ?? 'PARENT / GUARDIAN / CANDIDATE';
         _loading = false;
       });
     } catch (_) {
@@ -742,22 +736,22 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
 
   bool _editingLabel = false;
 
-  void _showEditLabelDialog(BuildContext context, String title, TextEditingController controller, String key) {
+  void _showEditLabelDialog(BuildContext context) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1C1A2E),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Edit: $title', style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+        title: const Text('Edit Section Label', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Shown on web & user app', style: TextStyle(color: Colors.white54, fontSize: 12)),
+          const Text('Shown above CNIC fields on web & user app', style: TextStyle(color: Colors.white54, fontSize: 12)),
           const SizedBox(height: 12),
           TextField(
-            controller: controller,
+            controller: _sectionLabelController,
             autofocus: true,
             style: const TextStyle(color: Colors.white, fontSize: 13),
             decoration: InputDecoration(
-              hintText: title,
+              hintText: 'PARENT / GUARDIAN / CANDIDATE',
               hintStyle: const TextStyle(color: Colors.white24, fontSize: 13),
               filled: true,
               fillColor: Colors.white.withOpacity(0.06),
@@ -773,7 +767,7 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
           StatefulBuilder(builder: (ctx2, setSt) => TextButton(
             onPressed: _savingLabel ? null : () async {
               setSt(() {});
-              await _saveLabelKey(key, controller.text.trim());
+              await _saveSectionLabel();
               if (ctx2.mounted) Navigator.pop(ctx2);
             },
             child: _savingLabel
@@ -788,8 +782,6 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
   @override
   void dispose() {
     _sectionLabelController.dispose();
-    _educationLabelController.dispose();
-    _parentsLabelController.dispose();
     super.dispose();
   }
 
@@ -801,12 +793,13 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
     } catch (_) {}
   }
 
-  Future<void> _saveLabelKey(String key, String value) async {
+  Future<void> _saveSectionLabel() async {
     if (!AdminPerms.i.guardEdit(AdminPageKeys.verification, what: 'changing verification settings')) return;
-    if (value.isEmpty) return;
+    final label = _sectionLabelController.text.trim();
+    if (label.isEmpty) return;
     setState(() => _savingLabel = true);
     try {
-      await _db.rpc('admin_upsert_setting', params: {'p_key': key, 'p_value': value});
+      await _db.rpc('admin_upsert_setting', params: {'p_key': _keySectionLabel, 'p_value': label});
       await SupabaseService.instance.fetchAppSettings();
     } catch (_) {}
     if (mounted) setState(() => _savingLabel = false);
@@ -883,11 +876,10 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
                   child: Row(children: [
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Row(children: [
-                        Text(_sectionLabelController.text.isEmpty ? 'PARENT / GUARDIAN / CANDIDATE' : _sectionLabelController.text,
-                          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Colors.white)),
+                        const Text('Candidate CNIC', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Colors.white)),
                         const SizedBox(width: 6),
                         GestureDetector(
-                          onTap: () => _showEditLabelDialog(context, 'PARENT / GUARDIAN / CANDIDATE', _sectionLabelController, _keySectionLabel),
+                          onTap: () => _showEditLabelDialog(context),
                           child: const Icon(Icons.edit_rounded, size: 14, color: kPurple),
                         ),
                       ]),
@@ -905,58 +897,12 @@ class _VerificationSettingsCardState extends State<VerificationSettingsCard> {
                 ),
                 if (_candidateCnic) _subRow('Compulsory', 'Must be uploaded before proceeding',
                   _candidateCnicCompulsory, (v) { setState(() => _candidateCnicCompulsory = v); _toggle(_keyCandidateCnicCompulsory, v); }),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  child: Row(children: [
-                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Row(children: [
-                        Text(_educationLabelController.text.isEmpty ? 'Education Document' : _educationLabelController.text,
-                          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Colors.white)),
-                        const SizedBox(width: 6),
-                        GestureDetector(
-                          onTap: () => _showEditLabelDialog(context, 'Education Document', _educationLabelController, _keyEducationLabel),
-                          child: const Icon(Icons.edit_rounded, size: 14, color: kPurple),
-                        ),
-                      ]),
-                      const SizedBox(height: 3),
-                      const Text('Latest degree or certificate of the marriage-seeking person', style: TextStyle(fontSize: 11.5, color: Colors.white54)),
-                    ])),
-                    Switch(
-                      value: _latestDegree,
-                      onChanged: (v) { setState(() => _latestDegree = v); _toggle(_keyLatestDegree, v); },
-                      activeColor: kPurple,
-                      inactiveThumbColor: Colors.white24,
-                      inactiveTrackColor: Colors.white10,
-                    ),
-                  ]),
-                ),
+                _row('Education Document', 'Latest degree or certificate of the marriage-seeking person', _latestDegree,
+                  (v) { setState(() => _latestDegree = v); _toggle(_keyLatestDegree, v); }),
                 if (_latestDegree) _subRow('Compulsory', 'Must be uploaded before proceeding',
                   _latestDegreeCompulsory, (v) { setState(() => _latestDegreeCompulsory = v); _toggle(_keyLatestDegreeCompulsory, v); }),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  child: Row(children: [
-                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Row(children: [
-                        Text(_parentsLabelController.text.isEmpty ? 'Parents / Guardian CNIC' : _parentsLabelController.text,
-                          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Colors.white)),
-                        const SizedBox(width: 6),
-                        GestureDetector(
-                          onTap: () => _showEditLabelDialog(context, 'Parents / Guardian CNIC', _parentsLabelController, _keyParentsLabel),
-                          child: const Icon(Icons.edit_rounded, size: 14, color: kPurple),
-                        ),
-                      ]),
-                      const SizedBox(height: 3),
-                      const Text('CNIC front & back of the parent or guardian submitting this profile', style: TextStyle(fontSize: 11.5, color: Colors.white54)),
-                    ])),
-                    Switch(
-                      value: _parentsCnic,
-                      onChanged: (v) { setState(() => _parentsCnic = v); _toggle(_keyParentsCnic, v); },
-                      activeColor: kPurple,
-                      inactiveThumbColor: Colors.white24,
-                      inactiveTrackColor: Colors.white10,
-                    ),
-                  ]),
-                ),
+                _row('Parents / Guardian CNIC', 'CNIC front & back of the parent or guardian submitting this profile', _parentsCnic,
+                  (v) { setState(() => _parentsCnic = v); _toggle(_keyParentsCnic, v); }),
                 if (_parentsCnic) _subRow('Compulsory', 'Must be uploaded before proceeding',
                   _parentsCnicCompulsory, (v) { setState(() => _parentsCnicCompulsory = v); _toggle(_keyParentsCnicCompulsory, v); }),
 

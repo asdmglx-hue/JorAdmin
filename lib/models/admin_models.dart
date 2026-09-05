@@ -341,6 +341,18 @@ class AdminUser {
   final DateTime? lastSeenAt;
   final String? lastSeenSource;
 
+  // Payment proof uploaded by user after clicking Pay Now / Renew.
+  // paymentProofStatus: null | 'pending' | 'approved' | 'rejected'
+  // paymentProofType:   'new' (Pay Now) | 'renewal' (Renew)
+  final String? paymentProofUrl;
+  final String? paymentProofStatus;
+  final String? paymentProofPlan;
+  final String? paymentProofType;
+
+  // Orders screen archive flag — admin can snooze a pending order
+  final bool isOrderArchived;
+  final DateTime? archivedAt;
+
   AdminUser({this.proposalNumber,
     required this.id, required this.name, required this.age, required this.gender,
     required this.city, this.country, required this.caste, required this.sect, this.languages = const [], required this.education,
@@ -368,6 +380,9 @@ class AdminUser {
     this.deletedFrom, this.deletionReason, this.adminNotes, this.registrationAllowed = false, this.aiContacted = false, this.docVerification = const {}, this.isDocVerified = false, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
     this.guardianCnicFront, this.guardianCnicBack, this.educationDocument, this.hasPendingVerificationRequest = false,
     this.appliedCouponCode, this.submissionSource, this.lastSeenAt, this.lastSeenSource,
+    this.paymentProofUrl, this.paymentProofStatus, this.paymentProofPlan, this.paymentProofType,
+    this.isOrderArchived = false,
+    this.archivedAt,
   });
 
   factory AdminUser.fromJson(Map<String, dynamic> json) {
@@ -517,6 +532,12 @@ class AdminUser {
       submissionSource: json['submission_source'] as String?,
       lastSeenAt: json['last_seen_at'] != null ? DateTime.parse(json['last_seen_at'] as String).toLocal() : null,
       lastSeenSource: json['last_seen_source'] as String?,
+      paymentProofUrl: json['payment_proof_url'] as String?,
+      paymentProofStatus: json['payment_proof_status'] as String?,
+      paymentProofPlan: json['payment_proof_plan'] as String?,
+      paymentProofType: json['payment_proof_type'] as String?,
+      isOrderArchived: (json['is_order_archived'] as bool?) ?? false,
+      archivedAt: json['archived_at'] != null ? DateTime.parse(json['archived_at'] as String).toLocal() : null,
     );
   }
 
@@ -601,6 +622,10 @@ class AdminUser {
     Object? profilePhoto = _unset, Object? cnicFront = _unset, Object? cnicBack = _unset, String? password,
     Object? guardianCnicFront = _unset, Object? guardianCnicBack = _unset, Object? educationDocument = _unset,
     String? appliedCouponCode, String? submissionSource,
+    Object? paymentProofUrl = _unset, Object? paymentProofStatus = _unset,
+    Object? paymentProofPlan = _unset, Object? paymentProofType = _unset,
+    bool? isOrderArchived,
+    Object? archivedAt = _unset,
   }) => AdminUser(
     id: id, name: name ?? this.name, age: age ?? this.age, gender: gender ?? this.gender,
     city: city ?? this.city,
@@ -660,6 +685,12 @@ class AdminUser {
     hasPendingVerificationRequest: this.hasPendingVerificationRequest,
     appliedCouponCode: appliedCouponCode ?? this.appliedCouponCode,
     submissionSource: submissionSource ?? this.submissionSource,
+    paymentProofUrl: paymentProofUrl is _Unset ? this.paymentProofUrl : paymentProofUrl as String?,
+    paymentProofStatus: paymentProofStatus is _Unset ? this.paymentProofStatus : paymentProofStatus as String?,
+    paymentProofPlan: paymentProofPlan is _Unset ? this.paymentProofPlan : paymentProofPlan as String?,
+    paymentProofType: paymentProofType is _Unset ? this.paymentProofType : paymentProofType as String?,
+    isOrderArchived: isOrderArchived ?? this.isOrderArchived,
+    archivedAt: archivedAt is _Unset ? this.archivedAt : archivedAt as DateTime?,
   );
 }
 

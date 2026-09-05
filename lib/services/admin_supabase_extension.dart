@@ -49,7 +49,9 @@ const String _adminUserCols = 'id,proposal_number,name,age,gender,city,country,c
     'deletion_reason,admin_notes,discarded,suggested_info,profile_photo_url,'
     'cnic_front_url,cnic_back_url,guardian_cnic_front_url,guardian_cnic_back_url,'
     'education_document_url,applied_coupon_code,profession_category,registration_allowed,ai_contacted,doc_verification,is_doc_verified,'
-    'submission_source,last_seen_at,last_seen_source';
+    'submission_source,last_seen_at,last_seen_source,'
+    'payment_proof_url,payment_proof_status,payment_proof_plan,payment_proof_type,'
+    'is_order_archived,archived_at';
 
 extension AdminSupabaseExtension on SupabaseService {
   Future<List<AdminUser>> fetchAdminUsers() async {

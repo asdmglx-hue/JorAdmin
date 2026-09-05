@@ -127,6 +127,8 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   // cleared. See _onPhotoChanged.
   bool _photoOpInFlight = false;
 
+
+
   // Local string vars for subfield visibility (mirrors _user fields)
   late String _siblingsVal;
   late String _houseVal;
@@ -515,7 +517,12 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           _field('Age', _ageCtrl, type: TextInputType.number),
           _HeightDropdowns(controller: _heightCtrl, darkTheme: true, label: 'Height'),
           _phoneField('Phone Number', _phoneCtrl, _selectedCountry, (c) => setState(() => _selectedCountry = c)),
+          _drop('Contact Person (Phone 1)', _user.contactPerson ?? '', ['Self', 'Father', 'Mother', 'Brother', 'Sister', 'Husband', 'Wife', 'Son', 'Daughter', 'Uncle', 'Aunt', 'Guardian'],
+              (v) => setState(() => _user = _user.copyWith(contactPerson: v))),
           _phoneField('Second Phone Number (optional)', _phone2Ctrl, _selectedCountry2, (c) => setState(() => _selectedCountry2 = c), required: false),
+          if (_phone2Ctrl.text.trim().isNotEmpty)
+            _drop('Contact Person (Phone 2)', _user.contactPerson2 ?? '', ['Self', 'Father', 'Mother', 'Brother', 'Sister', 'Husband', 'Wife', 'Son', 'Daughter', 'Uncle', 'Aunt', 'Guardian'],
+                (v) => setState(() => _user = _user.copyWith(contactPerson2: v))),
           _field('CNIC Number', _cnicCtrl, type: TextInputType.number, formatters: [
             FilteringTextInputFormatter.allow(RegExp(r'[\d-]')),
             _AdminCnicFormatter(),
@@ -587,7 +594,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               _subField('Daughters', _girlsCtrl, type: TextInputType.number),
             ]),
 
-          _multiField('About Yourself', _aboutCtrl, maxLength: 200),
+          _multiField('About Yourself', _aboutCtrl, maxLength: 400, onGenerate: _generateAbout),
           _multiField('Looking For', _lookingForCtrl, maxLength: 200),
 
           // ── Photos ──
@@ -612,11 +619,11 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           _mainHeader('Verification'),
           SizedBox(height: _S.of(context).s(12)),
 
-          // ── Parent / Guardian / Candidate CNIC ───────────────────────────
+          // ── Marriage-Seeking Person CNIC ──────────────────────────────────
           _verificationSectionHeader(
-            title: 'PARENT / GUARDIAN / CANDIDATE CNIC',
+            title: 'Candidate CNIC',
             docKeys: ['cnic_front', 'cnic_back'],
-            docName: 'Parent / Guardian / Candidate CNIC',
+            docName: 'Candidate CNIC',
             hasDoc: (_user.cnicFront?.isNotEmpty ?? false) || (_user.cnicBack?.isNotEmpty ?? false),
           ),
           SizedBox(height: _S.of(context).s(8)),
@@ -636,6 +643,57 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
             )),
           ]),
 
+          SizedBox(height: _S.of(context).s(14)),
+
+          // ── Most Recent Education Document ────────────────────────────────
+          _verificationSectionHeader(
+            title: 'Recent Education Document',
+            docKeys: ['education_document'],
+            docName: 'Education Document',
+            hasDoc: _user.educationDocument?.isNotEmpty ?? false,
+          ),
+          SizedBox(height: _S.of(context).s(8)),
+          _certField(
+            label: 'Education Document',
+            url: _user.educationDocument,
+            cnicOrId: _user.cnic ?? _user.id,
+            photoType: 'education_document',
+            onChanged: (url) => _onPhotoChanged('education_document', url, (u) => _user.copyWith(educationDocument: u)),
+          ),
+
+          SizedBox(height: _S.of(context).s(6)),
+
+          // ── Parent / Guardian CNIC ────────────────────────────────────────
+          _verificationSectionHeader(
+            title: 'Parent / Guardian CNIC',
+            docKeys: ['guardian_cnic_front', 'guardian_cnic_back'],
+            docName: 'Parent CNIC',
+            hasDoc: (_user.guardianCnicFront?.isNotEmpty ?? false) || (_user.guardianCnicBack?.isNotEmpty ?? false),
+          ),
+          SizedBox(height: _S.of(context).s(8)),
+          Row(children: [
+            Expanded(child: _EditablePhotoSlot(
+              label: 'CNIC Front', icon: Icons.credit_card_rounded,
+              photoUrl: _user.guardianCnicFront, cnicOrId: _user.cnic ?? _user.id,
+              photoType: 'guardian_cnic_front',
+              onChanged: (url) => _onPhotoChanged('guardian_cnic_front', url, (u) => _user.copyWith(guardianCnicFront: u)),
+            )),
+            SizedBox(width: _S.of(context).s(10)),
+            Expanded(child: _EditablePhotoSlot(
+              label: 'CNIC Back', icon: Icons.credit_card_rounded,
+              photoUrl: _user.guardianCnicBack, cnicOrId: _user.cnic ?? _user.id,
+              photoType: 'guardian_cnic_back',
+              onChanged: (url) => _onPhotoChanged('guardian_cnic_back', url, (u) => _user.copyWith(guardianCnicBack: u)),
+            )),
+          ]),
+
+          SizedBox(height: _S.of(context).s(4)),
+
+          // ── Payment Proof ─────────────────────────────────────────────────
+          SizedBox(height: _S.of(context).s(12)),
+          _mainHeader('Payment Proof'),
+          SizedBox(height: _S.of(context).s(10)),
+          _buildPaymentProofSection(),
           SizedBox(height: _S.of(context).s(4)),
 
           _mainHeader('Additional Information'),
@@ -769,7 +827,6 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
           // ── NOTES FROM APPLICANT ──
           const SizedBox(height: 8),
-          _multiField('Profile Manager', _adminNotesCtrl),
 
           const SizedBox(height: 40),
         ],
@@ -779,11 +836,224 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
+  // ── About Auto-Generator (rule-based, no API, free & offline) ───────────
+  void _generateAbout() {
+    final text = _buildAboutText(_user);
+    setState(() => _aboutCtrl.text = text);
+  }
+
+  static String _buildAboutText(AdminUser u) {
+    final isMale = u.gender.toLowerCase() == 'male';
+    final he  = isMale ? 'He'  : 'She';
+    final his = isMale ? 'His' : 'Her';
+    final genderWord = isMale ? 'male' : 'female';
+    final sentences = <String>[];
+
+    String? nz(String? v) => (v == null || v.trim().isEmpty) ? null : v.trim();
+
+    // ── 1. Opening: age · gender · profession · education · location ───────
+    final city    = u.city.trim();
+    final country = nz(u.country);
+    final abroad  = country != null && country.toLowerCase() != 'pakistan';
+    final location = abroad ? '$city, $country' : city;
+    final prof    = nz(u.profession);
+    final edu     = nz(u.education);
+    final empType = nz(u.employmentType);
+
+    final degrees = <String>[
+      if (nz(u.degreeTitle)  != null) nz(u.degreeTitle)!,
+      if (nz(u.degreeTitle2) != null) nz(u.degreeTitle2)!,
+      if (nz(u.degreeTitle3) != null) nz(u.degreeTitle3)!,
+    ];
+    final institutes = <String>[
+      if (nz(u.institute)  != null) nz(u.institute)!,
+      if (nz(u.institute2) != null) nz(u.institute2)!,
+      if (nz(u.institute3) != null) nz(u.institute3)!,
+    ];
+    final degStr  = degrees.isNotEmpty   ? degrees.join(' / ')    : null;
+    final instStr = institutes.isNotEmpty ? institutes.join(' / ') : null;
+
+    String eduPhrase = '';
+    if (degStr != null && instStr != null)   eduPhrase = '$degStr from $instStr';
+    else if (degStr != null && edu != null)  eduPhrase = '$degStr ($edu)';
+    else if (degStr != null)                 eduPhrase = degStr;
+    else if (instStr != null && edu != null) eduPhrase = '$edu from $instStr';
+    else if (edu != null)                    eduPhrase = edu;
+
+    final empNote = empType != null ? ' ($empType)' : '';
+
+    if (prof != null && eduPhrase.isNotEmpty) {
+      sentences.add('A ${u.age} year old $genderWord, $prof$empNote with $eduPhrase, based in $location.');
+    } else if (prof != null) {
+      sentences.add('A ${u.age} year old $genderWord working as a $prof$empNote, based in $location.');
+    } else if (eduPhrase.isNotEmpty) {
+      sentences.add('A ${u.age} year old $genderWord with $eduPhrase, based in $location.');
+    } else {
+      sentences.add('A ${u.age} year old $genderWord based in $location.');
+    }
+
+    // ── 2. Physical ────────────────────────────────────────────────────────
+    final ftTotal = u.heightInches.round();
+    final ft  = ftTotal ~/ 12;
+    final inc = ftTotal % 12;
+    final heightStr = '${ft}ft ${inc}in';
+    final physParts = <String>['$heightStr tall'];
+    if (u.weightKg != null) physParts.add('${u.weightKg!.round()} kg');
+    final complexion = nz(u.complexion);
+    if (complexion != null) physParts.add('${complexion.toLowerCase()} complexion');
+    sentences.add('$he is ${physParts.join(', ')}.');
+
+    // ── 3. Salary ──────────────────────────────────────────────────────────
+    if (u.salaryStart != null && u.salaryEnd != null) {
+      sentences.add('$his monthly income ranges from PKR ${u.salaryStart!.toInt()} to ${u.salaryEnd!.toInt()}.');
+    } else if (u.salaryStart != null) {
+      sentences.add('$his monthly income is around PKR ${u.salaryStart!.toInt()}.');
+    }
+
+    // ── 4. Religion & practice level ──────────────────────────────────────
+    final practice   = nz(u.practiceLevel);
+    final sect       = nz(u.sect);
+    final hijabBeard = isMale ? nz(u.beard) : nz(u.hijab);
+
+    // Map practice level to natural adjective (always ends with 'practicing')
+    String? practiceAdj;
+    if (practice != null) {
+      final p = practice.toLowerCase();
+      if (p.contains('high') || p.contains('very') || p.contains('strict')) {
+        practiceAdj = 'high';
+      } else if (p.contains('moderate')) {
+        practiceAdj = 'moderate';
+      } else if (p.contains('low') || p.contains('less') || p.contains('not')) {
+        practiceAdj = 'low';
+      } else {
+        practiceAdj = p.replaceAll('practicing', '').trim();
+      }
+    }
+
+    final extra = <String>[];
+    if (!isMale && hijabBeard != null && hijabBeard.toLowerCase() != 'no') extra.add('observes hijab');
+    if (isMale  && hijabBeard != null && hijabBeard.toLowerCase() != 'no') extra.add('keeps a beard');
+
+    // Build: "He is a Sunni, high practicing Muslim who keeps a beard."
+    final sectPart = sect != null ? '$sect, ' : '';
+    final practicePart = practiceAdj != null ? '$practiceAdj practicing ' : '';
+    final muslimBase = '$he is a $sectPart${practicePart}Muslim';
+    sentences.add(extra.isNotEmpty ? '$muslimBase who ${extra.join(' and ')}.' : '$muslimBase.');
+
+    // ── 5. Caste & language — combined naturally ────────────────────────────
+    final caste     = nz(u.caste);
+    final languages = u.languages.where((l) => l.trim().isNotEmpty).toList();
+
+    if (languages.isNotEmpty && caste != null) {
+      final langStr = languages.length == 1
+          ? languages.first
+          : '${languages.sublist(0, languages.length - 1).join(', ')} and ${languages.last}';
+      sentences.add('$he belongs to a $langStr speaking $caste family.');
+    } else if (caste != null) {
+      sentences.add('$he belongs to the $caste family.');
+    } else if (languages.isNotEmpty) {
+      final langStr = languages.length == 1
+          ? languages.first
+          : '${languages.sublist(0, languages.length - 1).join(', ')} and ${languages.last}';
+      sentences.add('$he is from a $langStr speaking family.');
+    }
+
+    // ── 6. Marital status & kids ───────────────────────────────────────────
+    final marital    = u.maritalStatus.trim().toLowerCase();
+    final marriageNo = nz(u.marriageNumber);
+    if (marital.isNotEmpty && marital != 'never married') {
+      final suffix = marriageNo != null ? ' ($marriageNo)' : '';
+      if (u.hasKids == true) {
+        final kidParts = <String>[];
+        if ((u.boys  ?? 0) > 0) kidParts.add('${u.boys} son${u.boys!  > 1 ? "s" : ""}');
+        if ((u.girls ?? 0) > 0) kidParts.add('${u.girls} daughter${u.girls! > 1 ? "s" : ""}');
+        final kidStr = kidParts.isNotEmpty ? ' with ${kidParts.join(' and ')}' : '';
+        sentences.add('Previously $marital$kidStr$suffix.');
+      } else {
+        sentences.add('$he is $marital$suffix.');
+      }
+    }
+
+    // ── 7. Family ──────────────────────────────────────────────────────────
+    final familyType  = nz(u.familyType);
+    final fatherOcc   = nz(u.fatherOccupation);
+    final motherOcc   = nz(u.motherOccupation);
+    final fatherAlive = u.fatherAlive;
+    final motherAlive = u.motherAlive;
+    final brothers    = u.brothers;
+    final sisters     = u.sisters;
+
+    if (familyType != null) sentences.add('$he comes from a ${familyType.toLowerCase()}.');
+
+    final parentParts = <String>[];
+    if (fatherAlive != null) {
+      final fStatus = fatherAlive
+          ? (fatherOcc != null ? 'alive, works as a $fatherOcc' : 'alive')
+          : 'deceased';
+      parentParts.add('father is $fStatus');
+    } else if (fatherOcc != null) {
+      parentParts.add('father is a $fatherOcc');
+    }
+    if (motherAlive != null) {
+      final mStatus = motherAlive
+          ? (motherOcc != null ? 'alive, works as a $motherOcc' : 'alive')
+          : 'deceased';
+      parentParts.add('mother is $mStatus');
+    } else if (motherOcc != null) {
+      parentParts.add('mother is a $motherOcc');
+    }
+    if (parentParts.isNotEmpty) sentences.add('$his ${parentParts.join('; ')}.');
+
+    if (u.hasSiblings == true && (brothers > 0 || sisters > 0)) {
+      final sibParts = <String>[];
+      if (brothers > 0) sibParts.add('$brothers brother${brothers > 1 ? "s" : ""}');
+      if (sisters  > 0) sibParts.add('$sisters sister${sisters  > 1 ? "s" : ""}');
+      sentences.add('$he has ${sibParts.join(' and ')}.');
+    }
+
+    // ── 8. Home & selected assets (no car / other property) ───────────────
+    final homeType  = nz(u.homeType);
+    final houseSize = nz(u.houseSize);
+
+    if (homeType != null || houseSize != null) {
+      final homeParts = <String>[];
+      if (homeType  != null) homeParts.add(homeType.toLowerCase());
+      if (houseSize != null) homeParts.add(houseSize);
+      sentences.add('$he lives in a ${homeParts.join(', ')} home.');
+    }
+
+    final assetParts = <String>[];
+    if (u.hasGenerator == true) assetParts.add('a generator');
+    if (u.hasSolar     == true) assetParts.add('a solar system');
+    if (u.hasServant   == true) assetParts.add('household staff');
+    if (assetParts.isNotEmpty) sentences.add('$he has ${assetParts.join(', ')}.');
+
+    // ── 9. Disability note ─────────────────────────────────────────────────
+    final disability = nz(u.disabilityDetails);
+    if (disability != null) sentences.add('Note: $disability.');
+
+    // ── Combine & trim to 400 chars ────────────────────────────────────────
+    var result = sentences.join(' ').trim();
+    if (result.length > 400) {
+      result = result.substring(0, 397).trimRight();
+      final lastSpace = result.lastIndexOf(' ');
+      if (lastSpace > 350) result = result.substring(0, lastSpace);
+      result = '$result...';
+    }
+    return result;
+  }
+
+
+
+
+
+
+
 
   // ── Read-only profile view (same style as Review Proposal screen) ──────────
 
   // Phone row: label | [call] [whatsapp] | number (right)
-  Widget _pPhoneRow(String label, String phone) {
+  Widget _pPhoneRow(String label, String phone, { String? contactPerson }) {
     final s = _S.of(context);
     final cleaned = phone.replaceAll(RegExp(r'[\s\-()]'), '');
     final waNumber = cleaned.startsWith('+92')
@@ -798,9 +1068,14 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     return Padding(
       padding: EdgeInsets.symmetric(vertical: s.s(7)),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        // Label
-        SizedBox(width: s.d(90), child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: s.f(12.5)))),
+        // Label + contact person
+        SizedBox(width: s.d(90), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: s.f(12.5))),
+          if (contactPerson != null && contactPerson.isNotEmpty)
+            Text(contactPerson, maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: s.f(10.5))),
+        ])),
         Expanded(
           child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
             // Call icon
@@ -1032,9 +1307,9 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           _pR('Gender', u.gender),
           _pR('Height', heightLabel),
           if (!u.contactPhone.startsWith('unknown_'))
-            _pPhoneRow('Phone', u.contactPhone),
+            _pPhoneRow('Phone', u.contactPhone, contactPerson: u.contactPerson),
           if (u.contactPhone2 != null && u.contactPhone2!.isNotEmpty)
-            _pPhoneRow('Phone 2', u.contactPhone2!),
+            _pPhoneRow('Phone 2', u.contactPhone2!, contactPerson: u.contactPerson2),
           if (u.cnic != null && u.cnic!.isNotEmpty) _pR('CNIC', formatCnicDisplay(u.cnic!)),
           if (u.password != null && u.password!.isNotEmpty) _pR('Password', u.password!),
           if (u.country != null && u.country!.isNotEmpty) _pR('Country', u.country!),
@@ -1128,10 +1403,10 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
         ]),
       ),
 
-      // ── CNIC Photos ──
+      // ── Marriage Seeking Person CNIC ──
       if (u.cnicFront != null || u.cnicBack != null) ...[
         SizedBox(height: s.s(16)),
-        Text('PARENT / GUARDIAN / CANDIDATE CNIC', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        Text('CANDIDATE CNIC', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
         SizedBox(height: s.s(8)),
         Row(children: [
           if (u.cnicFront != null) Expanded(child: _AdminPhotoSlot(label: 'Front', icon: Icons.credit_card_rounded, photoUrl: u.cnicFront)),
@@ -1140,21 +1415,43 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
         ]),
       ],
 
-      // ── Profile Manager ──
-      if (u.adminNotes != null && u.adminNotes!.isNotEmpty) ...[
+      // ── Education Document ──
+      if (u.educationDocument != null && u.educationDocument!.isNotEmpty) ...[
         SizedBox(height: s.s(16)),
-        Text('Profile Manager', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        Text('RECENT EDUCATION DOCUMENT', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
         SizedBox(height: s.s(8)),
-        Container(
-          width: double.infinity,
-          padding: EdgeInsets.all(s.s(14)),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.04),
-            borderRadius: BorderRadius.circular(s.s(12)),
-            border: Border.all(color: Colors.white.withOpacity(0.08)),
+        _AdminPhotoSlot(label: 'Education Document', icon: Icons.school_rounded, photoUrl: u.educationDocument),
+      ],
+
+      // ── Parent / Guardian CNIC ──
+      if (u.guardianCnicFront != null || u.guardianCnicBack != null) ...[
+        SizedBox(height: s.s(16)),
+        Text('PARENT / GUARDIAN CNIC', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        SizedBox(height: s.s(8)),
+        Row(children: [
+          if (u.guardianCnicFront != null) Expanded(child: _AdminPhotoSlot(label: 'Front', icon: Icons.credit_card_rounded, photoUrl: u.guardianCnicFront)),
+          if (u.guardianCnicFront != null && u.guardianCnicBack != null) SizedBox(width: s.s(10)),
+          if (u.guardianCnicBack != null) Expanded(child: _AdminPhotoSlot(label: 'Back', icon: Icons.credit_card_rounded, photoUrl: u.guardianCnicBack)),
+        ]),
+      ],
+
+      // ── Profile Manager ──
+      // ── Payment Proof ──
+      if (u.paymentProofUrl != null && u.paymentProofUrl!.isNotEmpty) ...[
+        SizedBox(height: s.s(16)),
+        Text('PAYMENT PROOF', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        SizedBox(height: s.s(6)),
+        Row(children: [
+          if (u.paymentProofPlan != null) Container(
+            padding: EdgeInsets.symmetric(horizontal: s.s(8), vertical: s.s(3)),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.07), borderRadius: BorderRadius.circular(s.s(6))),
+            child: Text(u.paymentProofPlan!, style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.6), fontWeight: FontWeight.w600)),
           ),
-          child: Text(u.adminNotes!, style: TextStyle(fontSize: s.f(13), color: Colors.white.withOpacity(0.8), height: 1.5)),
-        ),
+          if (u.paymentProofPlan != null) SizedBox(width: s.s(6)),
+          _paymentProofStatusBadge(u.paymentProofStatus, s),
+        ]),
+        SizedBox(height: s.s(8)),
+        _AdminPhotoSlot(label: 'Payment Receipt', icon: Icons.receipt_long_rounded, photoUrl: u.paymentProofUrl),
       ],
 
       // ── Raw Proposal ──
@@ -1602,6 +1899,261 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     }
   }
 
+  // ── Payment section (always visible in edit mode) ────────────────────────
+  Widget _buildPaymentSection() {
+    final s = _S.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!widget.readOnly)
+          _EditablePhotoSlot(
+            label: 'Payment Receipt',
+            icon: Icons.receipt_long_rounded,
+            photoUrl: _user.paymentProofUrl,
+            cnicOrId: _user.cnic ?? _user.id,
+            photoType: 'payment_proof',
+            onChanged: (url) async {
+              if (url != null) {
+                await SupabaseService.instance.client.from('proposals').update({
+                  'payment_proof_url': url,
+                  'payment_proof_status': 'pending',
+                  'payment_proof_plan': 'Rishta Profile',
+                  'payment_proof_type': 'new',
+                }).eq('id', _user.id);
+                setState(() {
+                  _user = _user.copyWith(
+                    paymentProofUrl: url,
+                    paymentProofStatus: 'pending',
+                    paymentProofPlan: 'Rishta Profile',
+                    paymentProofType: 'new',
+                  );
+                  _baseline = _user;
+                });
+              } else {
+                await SupabaseService.instance.client.from('proposals').update({
+                  'payment_proof_url': null,
+                  'payment_proof_status': null,
+                  'payment_proof_plan': null,
+                  'payment_proof_type': null,
+                }).eq('id', _user.id);
+                setState(() {
+                  _user = _user.copyWith(
+                    paymentProofUrl: null,
+                    paymentProofStatus: null,
+                    paymentProofPlan: null,
+                    paymentProofType: null,
+                  );
+                  _baseline = _user;
+                });
+              }
+            },
+          ),
+        if (widget.readOnly && _user.paymentProofUrl != null && _user.paymentProofUrl!.isNotEmpty)
+          _AdminPhotoSlot(label: 'Payment Receipt', icon: Icons.receipt_long_rounded, photoUrl: _user.paymentProofUrl),
+        if (_user.paymentProofUrl != null && _user.paymentProofUrl!.isNotEmpty) ...[
+          SizedBox(height: s.s(10)),
+          _buildPaymentProofSection(),
+        ],
+      ],
+    );
+  }
+
+    // ── Payment Proof section (edit mode) ────────────────────────────────────
+  Widget _buildPaymentProofSection() {
+    final s = _S.of(context);
+    final status = _user.paymentProofStatus;
+    final url    = _user.paymentProofUrl;
+    final plan   = _user.paymentProofPlan ?? '';
+    final type   = _user.paymentProofType ?? 'new';
+
+    // No proof yet — show upload slot
+    if (url == null || url.isEmpty) {
+      return _EditablePhotoSlot(
+        label: 'Upload Payment Receipt',
+        icon: Icons.receipt_long_rounded,
+        photoUrl: null,
+        cnicOrId: _user.cnic ?? _user.id,
+        photoType: 'payment_proof',
+        onChanged: (newUrl) async {
+          if (newUrl == null) return;
+          await SupabaseService.instance.client.from('proposals').update({
+            'payment_proof_url': newUrl,
+            'payment_proof_status': 'pending',
+            'payment_proof_plan': 'Rishta Profile',
+            'payment_proof_type': 'new',
+          }).eq('id', _user.id);
+          setState(() {
+            _user = _user.copyWith(
+              paymentProofUrl: newUrl,
+              paymentProofStatus: 'pending',
+              paymentProofPlan: 'Rishta Profile',
+              paymentProofType: 'new',
+            );
+            _baseline = _user;
+          });
+        },
+      );
+    }
+
+    return Container(
+      padding: EdgeInsets.all(s.s(14)),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(s.s(14)),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Plan label + status badge row
+          Row(children: [
+            if (plan.isNotEmpty) Container(
+              padding: EdgeInsets.symmetric(horizontal: s.s(8), vertical: s.s(3)),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.07),
+                borderRadius: BorderRadius.circular(s.s(6)),
+              ),
+              child: Text(plan, style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.6), fontWeight: FontWeight.w600)),
+            ),
+            if (plan.isNotEmpty) SizedBox(width: s.s(8)),
+            _paymentProofStatusBadge(status, s),
+            const Spacer(),
+            // Approve / Reject dropdown — only when pending and admin can edit
+            if (status == 'pending' && !widget.readOnly)
+              PopupMenuButton<String>(
+                color: const Color(0xFF1E1A33),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(12))),
+                onSelected: (val) => _onPaymentProofAction(val, type),
+                itemBuilder: (_) => [
+                  PopupMenuItem(value: 'approved', child: Row(children: [
+                    Icon(Icons.verified_rounded, color: kGreen, size: s.d(16)),
+                    SizedBox(width: s.s(8)),
+                    Text('Approve', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kGreen)),
+                  ])),
+                  PopupMenuItem(value: 'rejected', child: Row(children: [
+                    Icon(Icons.cancel_rounded, color: kRose, size: s.d(16)),
+                    SizedBox(width: s.s(8)),
+                    Text('Reject', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kRose)),
+                  ])),
+                  PopupMenuItem(value: 'clear', child: Row(children: [
+                    Icon(Icons.delete_outline_rounded, color: Colors.white54, size: s.d(16)),
+                    SizedBox(width: s.s(8)),
+                    Text('Clear', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: Colors.white54)),
+                  ])),
+                ],
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.more_horiz_rounded, size: s.d(18), color: Colors.white.withOpacity(0.5)),
+                ]),
+              ),
+          ]),
+          SizedBox(height: s.s(12)),
+          // Screenshot thumbnail — tappable to full screen
+          GestureDetector(
+            onTap: () => _openFullImage(url!),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(s.s(10)),
+              child: Image.network(
+                url!,
+                height: s.d(180),
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  height: s.d(100),
+                  color: Colors.white.withOpacity(0.05),
+                  child: Center(child: Icon(Icons.broken_image_rounded, color: Colors.white30, size: s.d(32))),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Opens a full-screen image viewer for the payment screenshot.
+  void _openFullImage(String url) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(backgroundColor: Colors.black, foregroundColor: Colors.white, title: const Text('Payment Receipt')),
+      body: InteractiveViewer(
+        child: Center(child: Image.network(url, fit: BoxFit.contain)),
+      ),
+    )));
+  }
+
+  /// Called when admin picks Approve, Reject or Clear from the payment proof dropdown.
+  Future<void> _onPaymentProofAction(String val, String type) async {
+    if (val == 'clear') {
+      final confirmed = await _confirmDialog('Clear Payment Proof?', 'This will remove the uploaded screenshot.');
+      if (!confirmed) return;
+      try {
+        await SupabaseService.instance.client.from('proposals').update({
+          'payment_proof_url': null,
+          'payment_proof_status': null,
+          'payment_proof_plan': null,
+          'payment_proof_type': null,
+        }).eq('id', _user.id);
+        setState(() {
+          _user = _user.copyWith(paymentProofUrl: null, paymentProofStatus: null, paymentProofPlan: null, paymentProofType: null);
+          _baseline = _user;
+        });
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: kRose));
+      }
+      return;
+    }
+    final actionLabel = val == 'approved' ? 'Approve' : 'Reject';
+    final confirmed = await _confirmDialog('$actionLabel Payment Proof?',
+      val == 'approved'
+        ? (type == 'renewal'
+            ? 'This will renew the user\'s subscription.'
+            : 'This will activate the user\'s profile subscription.')
+        : 'The user will be notified. Pay Now / Renew button will reappear for them.');
+    if (!confirmed) return;
+
+    try {
+      if (val == 'approved') {
+        await SupabaseService.instance.approvePaymentProof(_user.id, type);
+        setState(() {
+          _user = _user.copyWith(paymentProofStatus: 'approved');
+          _baseline = _user;
+        });
+      } else {
+        await SupabaseService.instance.rejectPaymentProof(_user.id);
+        setState(() {
+          _user = _user.copyWith(paymentProofStatus: 'rejected');
+          _baseline = _user;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: kRose),
+        );
+      }
+    }
+  }
+
+  /// Small coloured badge for payment proof status.
+  Widget _paymentProofStatusBadge(String? status, _S s) {
+    final Color color;
+    final IconData icon;
+    final String label;
+    switch (status) {
+      case 'approved':
+        color = kGreen; icon = Icons.verified_rounded; label = 'Approved';
+      case 'rejected':
+        color = kRose; icon = Icons.cancel_rounded; label = 'Rejected';
+      default:
+        color = Colors.orange; icon = Icons.hourglass_top_rounded; label = 'Pending Review';
+    }
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, size: s.d(13), color: color),
+      SizedBox(width: s.s(4)),
+      Text(label, style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700, color: color)),
+    ]);
+  }
+
   // ── Confirmation dialog ───────────────────────────────────────────────────
   // Returns true if all compulsory doc sections are fully approved in [dv].
   // Mirrors the top-level _compulsoryDocsApproved() logic from admin_users_screen
@@ -1766,7 +2318,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     );
   }
 
-  Widget _multiField(String label, TextEditingController ctrl, {int? maxLength}) {
+  Widget _multiField(String label, TextEditingController ctrl, {int? maxLength, VoidCallback? onGenerate}) {
     if (widget.readOnly) return _viewValue(label, ctrl.text);
     final s = _S.of(context);
     return Padding(
@@ -1774,7 +2326,29 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+          Row(
+            children: [
+              Text(label, style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+              if (onGenerate != null) ...[
+                const Spacer(),
+                GestureDetector(
+                  onTap: onGenerate,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: s.s(8), vertical: s.s(3)),
+                    decoration: BoxDecoration(
+                      color: kPurple.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(s.s(6)),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.auto_fix_high_rounded, color: kPurple, size: s.s(13)),
+                      SizedBox(width: s.s(4)),
+                      Text('Auto-generate', style: TextStyle(fontSize: s.f(10.5), color: kPurple, fontWeight: FontWeight.w600)),
+                    ]),
+                  ),
+                ),
+              ],
+            ],
+          ),
           SizedBox(height: s.s(5)),
           _MultiFieldWithCounter(ctrl: ctrl, maxLength: maxLength, inputDeco: _inputDeco(multiline: true)),
         ],

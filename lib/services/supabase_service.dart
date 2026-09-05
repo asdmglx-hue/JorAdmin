@@ -919,6 +919,55 @@ class SupabaseService extends ChangeNotifier {
     await _client.from('proposals').update({'ai_contacted': value}).eq('id', userId);
   }
 
+  // ── Payment Proof ─────────────────────────────────────────────────────────
+
+  /// Called when admin approves a payment screenshot.
+  /// proofType: 'new' → runs approveProposal flow (pending → active)
+  ///            'renewal' → runs renewSubscription flow (expired → active)
+  Future<void> approvePaymentProof(String userId, String proofType) async {
+    // Only mark the proof as approved — do NOT activate the profile.
+    // Activation is done exclusively via the Approve button in the Orders screen.
+    await _client.from('proposals').update({
+      'payment_proof_status': 'approved',
+    }).eq('id', userId);
+    // Notify user their proof was approved
+    _client.functions.invoke('notify-status-change', body: {
+      'type': 'payment_proof_submitted',
+      'proposal_id': userId,
+    }).then((_) {
+      debugPrint('✅ payment_proof_approved notify sent for userId=$userId');
+    }).catchError((e) {
+      debugPrint('⚠️  payment_proof_approved notify failed: $e');
+    });
+    notifyListeners();
+  }
+
+  /// Called when admin rejects a payment screenshot.
+  /// Clears the proof so Pay Now / Renew button reappears on website.
+  /// Archive or unarchive a pending order card.
+  Future<void> setOrderArchived(String userId, bool archived) async {
+    await _client.from('proposals')
+        .update({'is_order_archived': archived})
+        .eq('id', userId);
+    notifyListeners();
+  }
+
+  Future<void> rejectPaymentProof(String userId) async {
+    await _client.from('proposals').update({
+      'payment_proof_status': 'rejected',
+    }).eq('id', userId);
+    // Notify user their proof was rejected
+    _client.functions.invoke('notify-status-change', body: {
+      'type': 'payment_proof_rejected',
+      'proposal_id': userId,
+    }).then((_) {
+      debugPrint('✅ payment_proof_rejected push sent for userId=$userId');
+    }).catchError((e) {
+      debugPrint('⚠️  payment_proof_rejected push failed: $e');
+    });
+    notifyListeners();
+  }
+
   Future<void> pauseUser(String userId) async {
     await _client.from('proposals').update({'status': 'paused'}).eq('id', userId);
     notifyListeners();
@@ -1533,9 +1582,18 @@ class SupabaseService extends ChangeNotifier {
         return;
       }
     }
-    // All compulsory docs approved AND profile already active — unlock contacts
+    // All compulsory docs approved — upgrade subscription_status to active
+    // so contacts unlock without admin having to do anything extra.
     debugPrint('[DOC_PENDING] all compulsory docs approved for userId=$userId — upgrading to active');
     await _client.from('proposals').update({'subscription_status': 'active'}).eq('id', userId);
+    _client.functions.invoke('notify-status-change', body: {
+      'type': 'profile_verified',
+      'proposal_id': userId,
+    }).then((_) {
+      debugPrint('✅ profile_verified push sent for userId=$userId');
+    }).catchError((e) {
+      debugPrint('⚠️  profile_verified push failed: $e');
+    });
     notifyListeners();
   }
 
