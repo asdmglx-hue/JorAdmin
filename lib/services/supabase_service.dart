@@ -1,3 +1,10 @@
+// ── Identity Note ─────────────────────────────────────────────────────────────
+// All users are identified by phone number (OTP auth). There is NO CNIC login.
+// DB RPCs still use the parameter name 'p_cnic' for historical reasons —
+// the value passed is ALWAYS auth_phone (phone number), never a national ID.
+// Rule: 'CNIC' in a name = national ID document (verification/upload only).
+//       'Phone' in a name  = login identity (auth_phone column in proposals).
+// ────────────────────────────────────────────────────────────────────────────
 import 'package:shared_preferences/shared_preferences.dart';
 // dart:io removed for web compat
 import 'dart:convert';
@@ -55,6 +62,10 @@ class SupabaseService extends ChangeNotifier {
   /// edge function. The function looks up the user's fcm_token itself — this
   /// call only needs the proposal id. Fire-and-forget: never blocks or fails
   /// the approval flow if the push doesn't go through.
+  /// Public wrapper — call this when activating a View Only profile
+  /// so the user gets the same "profile approved" push as a normal approval.
+  void notifyProfileApproved(String proposalId) => _notifyProfileApproved(proposalId);
+
   void _notifyProfileApproved(String proposalId) {
     _client.functions.invoke('notify-status-change', body: {
       'type': 'profile_approved',
@@ -177,9 +188,9 @@ class SupabaseService extends ChangeNotifier {
 
   /// Admin signs in with email + password (replaces hardcoded PIN check).
   // Returns: true = success, false = wrong PIN, null = no internet
-  // ── Admin panel login (CNIC + password) ───────────────────────────────────
+  // ── Admin panel login (phone + password) ──────────────────────────────────
   //
-  //  The panel no longer has a PIN. An admin signs in with the CNIC +
+  //  The panel no longer has a PIN. An admin signs in with the phone number +
   //  password that was assigned to them in Settings → Create Admin, and
   //  those credentials are checked against public.admin_accounts by the
   //  admin_panel_login() RPC, which also returns their page permissions.
@@ -192,12 +203,12 @@ class SupabaseService extends ChangeNotifier {
   static const String kPanelServiceEmail = 'admin@jorapp.com';
   static const String kPanelServicePassword = 'JorPanel#2026#Kx9raf';
 
-  /// Verifies CNIC + password. Returns the admin's row (id, name, cnic,
+  /// Verifies phone + password. Returns the admin's row (id, name, phone,
   /// is_super, permissions) on success, null on wrong credentials, and
   /// throws on network/server failure so the UI can tell them apart.
-  Future<Map<String, dynamic>?> adminPanelLogin(String cnic, String password) async {
+  Future<Map<String, dynamic>?> adminPanelLogin(String phone, String password) async {
     final res = await _client.rpc('admin_panel_login', params: {
-      'p_cnic': cnic.replaceAll('-', '').trim(),
+      'p_phone': phone.trim(),
       'p_password': password.trim(),
     });
     if (res == null) return null;
@@ -525,13 +536,13 @@ class SupabaseService extends ChangeNotifier {
 
     // Upload photos to Cloudflare R2
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final cnic = (safeData['cnic'] as String? ?? 'unknown').replaceAll('-', '');
+    final identity = ((safeData['auth_phone'] as String? ?? 'unknown').replaceAll(RegExp(r'[^0-9]'), ''));
 
     Future<String?> _uploadPhoto(Uint8List? file, String type) async {
       if (file == null) return null;
       try {
         final bytes = file;
-        final path = 'proposals/$cnic/${type}_$timestamp.jpg';
+        final path = 'proposals/$identity/${type}_$timestamp.jpg';
         final url = await _uploadToR2(bytes: bytes, path: path);
         debugPrint('✅ Uploaded $type photo: $url');
         return url;
@@ -562,8 +573,8 @@ class SupabaseService extends ChangeNotifier {
 
     final proposalId = inserted['id'] as String;
 
-    // Store CNIC for subscription check on feed load
-    _submittedCnic = safeData['cnic'] as String?;
+    // Store identity for subscription check on feed load
+    _submittedPhone = safeData['auth_phone'] as String?;
 
     return proposalId;
   }
@@ -592,55 +603,57 @@ class SupabaseService extends ChangeNotifier {
 
   /// Atomically redeems an activation code for a given proposalId.
   /// Returns a [CodeRedemptionResult] with success/error info.
-  // Stored after successful CNIC activation — persisted via SharedPreferences
-  String? _activatedCnic;
-  String? get activatedCnic => _activatedCnic;
+  // Stored after successful phone-based activation — persisted via SharedPreferences
+  String? _activatedPhone;
+  String? get activatedPhone => _activatedPhone;
 
-  void setActivatedCnic(String cnic) {
-    _activatedCnic = cnic.trim();
-    _submittedCnic = cnic.trim();
-    _persistCnic(cnic.trim());
+  void setActivatedPhone(String phone) {
+    _activatedPhone = phone.trim();
+    _submittedPhone = phone.trim();
+    _persistPhone(phone.trim());
     notifyListeners();
   }
 
-  void clearActivatedCnic() {
-    _activatedCnic = null;
-    _submittedCnic = null;
+  void clearActivatedPhone() {
+    _activatedPhone = null;
+    _submittedPhone = null;
     SharedPreferences.getInstance().then((p) {
-      p.remove(_kActivatedCnicKey);
+      p.remove(_kActivatedPhoneKey);
+      p.remove('activated_cnic'); // clean up old key if present
       p.remove('user_cnic');
     });
   }
 
   // Stored after proposal submission
-  String? _submittedCnic;
-  String? get submittedCnic => _submittedCnic;
+  String? _submittedPhone;
+  String? get submittedPhone => _submittedPhone;
 
-  static const _kActivatedCnicKey = 'activated_cnic';
+  static const _kActivatedPhoneKey = 'activated_phone';
 
-  /// Call once on app start to restore persisted CNIC
-  Future<void> restorePersistedCnic() async {
+  /// Call once on app start to restore persisted phone identity
+  Future<void> restorePersistedIdentity() async {
     final prefs = await SharedPreferences.getInstance();
-    _activatedCnic = prefs.getString(_kActivatedCnicKey) ?? prefs.getString('user_cnic');
-    _submittedCnic = _activatedCnic;
-    // Also ensure activated_cnic is written for future restores
-    if (_activatedCnic != null) {
-      await prefs.setString(_kActivatedCnicKey, _activatedCnic!);
+    _activatedPhone = prefs.getString(_kActivatedPhoneKey)
+        ?? prefs.getString('activated_cnic')  // migrate old key
+        ?? prefs.getString('user_cnic');       // migrate legacy key
+    _submittedPhone = _activatedPhone;
+    if (_activatedPhone != null) {
+      await prefs.setString(_kActivatedPhoneKey, _activatedPhone!);
     }
   }
 
-  Future<void> _persistCnic(String cnic) async {
+  Future<void> _persistPhone(String phone) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kActivatedCnicKey, cnic);
+    await prefs.setString(_kActivatedPhoneKey, phone);
   }
 
-  /// Returns the gender of the proposal matching this CNIC (for filter locking)
-  Future<String?> getUserGenderByCnic(String cnic) async {
+  /// Returns the gender of the proposal matching this phone number (for filter locking)
+  Future<String?> getUserGenderByPhone(String phone) async {
     try {
       final res = await _client
           .from('proposals')
           .select('gender, status')
-          .eq('cnic', cnic.trim());
+          .eq('auth_phone', phone.trim());
       final rows = (res as List).cast<Map<String, dynamic>>();
       if (rows.isEmpty) return null;
       // Prefer non-deleted row if multiple exist
@@ -656,17 +669,17 @@ class SupabaseService extends ChangeNotifier {
     }
   }
 
-  Future<bool> hasActiveSubscriptionByCnic(String cnic) async {
+  Future<bool> hasActiveSubscriptionByPhone(String phone) async {
     try {
       final res = await _client
           .from('proposals')
           .select('status')
-          .eq('cnic', cnic.trim())
+          .eq('auth_phone', phone.trim())
           .eq('status', 'active')
           .maybeSingle();
       return res != null;
     } catch (e) {
-      debugPrint('hasActiveSubscriptionByCnic error: $e');
+      debugPrint('hasActiveSubscriptionByPhone error: $e');
       return false;
     }
   }
@@ -677,7 +690,7 @@ class SupabaseService extends ChangeNotifier {
       final res = await _client
           .from('proposals')
           .select('id')
-          .eq('cnic', cnic.trim())
+          .eq('auth_phone', cnic.trim())
           .inFilter('status', ['active', 'approved'])
           .limit(1);
       return (res as List).isNotEmpty;
@@ -702,12 +715,12 @@ class SupabaseService extends ChangeNotifier {
   }
 
   /// Fetches user status fields by CNIC for displaying status tag after login.
-  Future<Map<String, dynamic>?> fetchUserStatusByCnic(String cnic) async {
+  Future<Map<String, dynamic>?> fetchUserStatusByPhone(String phone) async {
     try {
       final res = await _client
           .from('proposals')
-          .select('id, proposal_number, name, age, city, country, profession, education, caste, sect, languages, marital_status, practice_level, hijab, beard, height_inches, home_type, house_size, location, about, looking_for, suggested_info, father_alive, mother_alive, brothers, sisters, status, deleted_from, subscription_tier, subscription_status, subscription_start, subscription_expiry, profile_photo_url, password, featured_boosts!featured_boosts_user_id_fkey(scheduled_date, is_used)')
-          .eq('cnic', cnic.trim());
+          .select('id, proposal_number, name, age, city, country, profession, education, caste, sect, languages, marital_status, practice_level, hijab, beard, height_inches, home_type, house_size, location, about, looking_for, suggested_info, father_alive, mother_alive, brothers, sisters, status, deleted_from, subscription_tier, subscription_status, subscription_start, subscription_expiry, profile_photo_url, password, auth_phone, featured_boosts!featured_boosts_user_id_fkey(scheduled_date, is_used)')
+          .eq('auth_phone', phone.trim());
       final rows = (res as List).cast<Map<String, dynamic>>();
       if (rows.isEmpty) return null;
       if (rows.length == 1) return rows.first;
@@ -728,41 +741,18 @@ class SupabaseService extends ChangeNotifier {
   }
 
   /// Returns true if the CNIC exists and password matches.
-  Future<Set<String>> fetchNotInterestedIds(String cnic) async {
+  Future<Set<String>> fetchNotInterestedIds(String phone) async {
     try {
       final res = await _client
           .from('proposals')
           .select('not_interested_ids')
-          .eq('cnic', cnic.trim())
+          .eq('auth_phone', phone.trim())
           .maybeSingle();
       if (res == null) return {};
       final ids = (res['not_interested_ids'] as List?)?.cast<String>() ?? [];
       return ids.toSet();
     } catch (_) {
       return {};
-    }
-  }
-
-  Future<void> addNotInterestedId(String cnic, String proposalId) async {
-    try {
-      await _client.rpc('append_not_interested', params: {
-        'p_cnic': cnic.trim(),
-        'p_proposal_id': proposalId,
-      });
-    } catch (_) {}
-  }
-
-  Future<bool> verifyCnicPassword(String cnic, String password) async {
-    try {
-      final res = await _client
-          .from('proposals')
-          .select('id')
-          .eq('cnic', cnic.trim())
-          .eq('password', password.trim())
-          .limit(1);
-      return (res as List).isNotEmpty;
-    } catch (_) {
-      return false;
     }
   }
 
@@ -775,7 +765,7 @@ class SupabaseService extends ChangeNotifier {
       final res = await _client
           .from('admin_accounts')
           .select('name')
-          .eq('cnic', cnic.trim())
+          .eq('auth_phone', cnic.trim())
           .eq('password', password.trim())
           .limit(1);
       final list = res as List;
@@ -786,16 +776,16 @@ class SupabaseService extends ChangeNotifier {
     }
   }
 
-  Future<CodeRedemptionResult> activateByCnic(String cnic) async {
+  Future<CodeRedemptionResult> activateByPhone(String phone) async {
     try {
       final res = await _client.rpc('activate_by_cnic', params: {
-        'p_cnic': cnic.trim(),
+        'p_cnic': phone.trim(),
       });
       final data = res as Map<String, dynamic>;
       if (data['success'] == true) {
-        _activatedCnic = cnic.trim();
-        _submittedCnic = cnic.trim();
-        await _persistCnic(cnic.trim());
+        _activatedPhone = phone.trim();
+        _submittedPhone = phone.trim();
+        await _persistPhone(phone.trim());
         notifyListeners();
         return CodeRedemptionResult(
           success: true,
@@ -804,11 +794,11 @@ class SupabaseService extends ChangeNotifier {
         );
       } else {
         final error = data['error'] as String? ?? '';
-        // Already active = treat as success, store CNIC so feed unlocks
+        // Already active = treat as success, store phone so feed unlocks
         if (error.toLowerCase().contains('already active')) {
-          _activatedCnic = cnic.trim();
-          _submittedCnic = cnic.trim();
-          await _persistCnic(cnic.trim());
+          _activatedPhone = phone.trim();
+          _submittedPhone = phone.trim();
+          await _persistPhone(phone.trim());
           notifyListeners();
         }
         return CodeRedemptionResult(success: false, error: error);
@@ -945,10 +935,26 @@ class SupabaseService extends ChangeNotifier {
   /// Called when admin rejects a payment screenshot.
   /// Clears the proof so Pay Now / Renew button reappears on website.
   /// Archive or unarchive a pending order card.
+  Future<void> restoreToPending(String userId) async {
+    await _client.from('proposals').update({
+      'status': 'pending',
+      'subscription_status': 'inactive',
+      'is_order_archived': false,
+    }).eq('id', userId);
+    notifyListeners();
+  }
+
   Future<void> setOrderArchived(String userId, bool archived) async {
-    await _client.from('proposals')
-        .update({'is_order_archived': archived})
-        .eq('id', userId);
+    if (!archived) {
+      // Unarchiving — move to View Only by setting status=active, subscription_status=doc_pending
+      await _client.from('proposals').update({
+        'is_order_archived': false,
+        'status': 'active',
+        'subscription_status': 'doc_pending',
+      }).eq('id', userId);
+    } else {
+      await _client.from('proposals').update({'is_order_archived': archived}).eq('id', userId);
+    }
     notifyListeners();
   }
 
@@ -1055,16 +1061,16 @@ class SupabaseService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Records payment by CNIC — matches to proposal or stores for admin to match
-  Future<void> recordPaymentByCnic({
-    required String cnic,
+  /// Records payment by phone — matches to proposal or stores for admin to match
+  Future<void> recordPaymentByPhone({
+    required String phone,
     required double amount,
     required String plan,
   }) async {
     final res = await _client
         .from('proposals')
         .select('id')
-        .eq('cnic', cnic)
+        .eq('auth_phone', phone)
         .maybeSingle();
 
     if (res != null) {
@@ -1077,7 +1083,7 @@ class SupabaseService extends ChangeNotifier {
       // Store pending payment for admin to match later
       try {
         await _client.from('pending_payments').insert({
-          'cnic'    : cnic,
+          'cnic'    : phone,
           'amount'  : amount,
           'plan'    : plan,
           'paid_at' : DateTime.now().toIso8601String(),
@@ -1179,10 +1185,10 @@ class SupabaseService extends ChangeNotifier {
 
     final row = await _client
         .from('proposals')
-        .select('cnic, applied_coupon_code')
+        .select('auth_phone, applied_coupon_code')
         .eq('id', userId)
         .single();
-    final cnic = row['cnic'] as String?;
+    final authPhone = row['auth_phone'] as String?;
     final appliedCouponCode = row['applied_coupon_code'] as String?;
     final coupon = await _resolveCoupon(appliedCouponCode);
     debugPrint('[APPROVE] appliedCouponCode=$appliedCouponCode -> '
@@ -1193,26 +1199,17 @@ class SupabaseService extends ChangeNotifier {
 
     if (isFreeMode && newUsersOnly) {
       bool everActiveBefore = false;
-      if (cnic != null && cnic.isNotEmpty) {
-        // IMPORTANT: checking approved_at here was a bug — that column has
-        // a database-level DEFAULT of now(), so it's set on every proposal
-        // the instant it's submitted, even while still pending, before any
-        // admin has approved anything. That made it look like every CNIC
-        // had "already been active" regardless of real history.
-        // subscription_start has no such default — it's only ever written
-        // by an actual approval (approveProposal / renewSubscription /
-        // approveAiProposal), so it's the real signal for "has this CNIC
-        // ever genuinely been approved before."
+      if (authPhone != null && authPhone.isNotEmpty) {
         final prior = await _client
             .from('proposals')
             .select('id')
-            .eq('cnic', cnic)
+            .eq('auth_phone', authPhone)
             .not('subscription_start', 'is', null)
             .limit(1);
         everActiveBefore = (prior as List).isNotEmpty;
-        debugPrint('[APPROVE] cnic=$cnic priorApprovedRows=${(prior).length} everActiveBefore=$everActiveBefore');
+        debugPrint('[APPROVE] authPhone=$authPhone priorApprovedRows=${(prior).length} everActiveBefore=$everActiveBefore');
       } else {
-        debugPrint('[APPROVE] cnic is null/empty on this proposal — treating as not-active-before by default');
+        debugPrint('[APPROVE] auth_phone is null/empty on this proposal — treating as not-active-before by default');
       }
       if (everActiveBefore) {
         price = standardPrice;
@@ -1275,8 +1272,15 @@ class SupabaseService extends ChangeNotifier {
     // but subscription_status = 'doc_pending' so contacts stay locked until
     // the user submits and admin approves the missing documents.
     final proposalRow = await _client.from('proposals').select(
-      'cnic_front_url, cnic_back_url, education_document_url, guardian_cnic_front_url, guardian_cnic_back_url'
+      'cnic_front_url, cnic_back_url, education_document_url, guardian_cnic_front_url, guardian_cnic_back_url, payment_proof_status'
     ).eq('id', userId).single();
+
+    // Only credit the plan price if the user uploaded a payment screenshot
+    // AND admin has explicitly approved it (payment_proof_status == 'approved').
+    // If there is no screenshot, or it is still pending / rejected, amount_paid stays 0.
+    final proofApproved = (proposalRow['payment_proof_status'] as String?) == 'approved';
+    final effectivePrice = proofApproved ? price : 0;
+    debugPrint('[APPROVE] payment_proof_status=${proposalRow['payment_proof_status']} proofApproved=$proofApproved -> effectivePrice=$effectivePrice (plan price was $price)');
 
     bool compulsoryDocsMissing = false;
     final cnicCompulsory    = settings['verify_now_candidate_cnic_compulsory'] != 'false';
@@ -1301,13 +1305,13 @@ class SupabaseService extends ChangeNotifier {
       if (!front || !back) compulsoryDocsMissing = true;
     }
 
-    debugPrint('[APPROVE] compulsoryDocsMissing=$compulsoryDocsMissing -> subscriptionStatus=${compulsoryDocsMissing ? 'doc_pending' : 'active'}');
+    debugPrint('[APPROVE] compulsoryDocsMissing=$compulsoryDocsMissing -> subscriptionStatus=active (always active on Approve)');
 
     await _client.from('proposals').update({
       'status': 'active',
       'subscription_tier': 'basic',
-      'subscription_status': compulsoryDocsMissing ? 'doc_pending' : 'active',
-      'amount_paid': price,
+      'subscription_status': 'active',
+      'amount_paid': effectivePrice,
       'subscription_days': days,
       'subscription_expiry': expiry,
       'subscription_start': now,
@@ -1334,8 +1338,15 @@ class SupabaseService extends ChangeNotifier {
     int days  = int.tryParse(settings['standard_plan_days'] ?? '90') ?? 90;
 
     // Add price to existing amount_paid (cumulative spent)
-    final row = await _client.from('proposals').select('amount_paid, applied_coupon_code').eq('id', userId).single();
+    final row = await _client.from('proposals').select('amount_paid, applied_coupon_code, payment_proof_status').eq('id', userId).single();
     final currentPaid = (row['amount_paid'] as num?)?.toInt() ?? 0;
+
+    // Only add the renewal price to spend if the user uploaded a payment
+    // screenshot AND admin has explicitly approved it (payment_proof_status == 'approved').
+    // If no screenshot, still pending, or rejected — renew the subscription but add 0.
+    final renewProofApproved = (row['payment_proof_status'] as String?) == 'approved';
+    debugPrint('[RENEW] payment_proof_status=${row['payment_proof_status']} renewProofApproved=$renewProofApproved');
+
     final coupon = await _resolveCoupon(row['applied_coupon_code'] as String?);
     if (coupon != null) {
       if (coupon.type == 'free_days' && coupon.freeDays != null && coupon.freeDays! > 0) {
@@ -1358,7 +1369,7 @@ class SupabaseService extends ChangeNotifier {
       'deleted_from': null,
       'subscription_tier': 'basic',
       'subscription_status': 'active',
-      'amount_paid': currentPaid + price,
+      'amount_paid': currentPaid + (renewProofApproved ? price : 0),
       'subscription_days': days,
       'subscription_expiry': expiry.toIso8601String(),
       'subscription_start': start.toIso8601String(),
@@ -1366,6 +1377,7 @@ class SupabaseService extends ChangeNotifier {
       'applied_coupon_code': null,
       'coupon_discount_percent': null,
     }).eq('id', userId);
+    debugPrint('[RENEW] amount_paid updated: $currentPaid + ${renewProofApproved ? price : 0} = ${currentPaid + (renewProofApproved ? price : 0)}');
     notifyListeners();
     _notifySubscriptionRenewed(userId, expiry);
     return {'price': price, 'days': days, 'expiry': expiry};
@@ -1401,6 +1413,13 @@ class SupabaseService extends ChangeNotifier {
     return res as String;
   }
 
+  /// Generates a sequential fake phone number for AI-imported profiles
+  /// that don't have a real CNIC. Format: +920000000001, +920000000002...
+  Future<String> generateNextAiPhone() async {
+    final res = await _client.rpc('generate_next_ai_phone');
+    return res as String;
+  }
+
   // Single atomic action for approving an AI-imported proposal from the
   // Users screen's long-press flow — sets CNIC, password, and
   // subscription/expiry (all required), plus amount spent (optional),
@@ -1418,6 +1437,7 @@ class SupabaseService extends ChangeNotifier {
     required String password,
     required int days,
     double? amountPaid,
+    String? authPhone,
   }) async {
     await _client.rpc('approve_ai_proposal', params: {
       'p_id': userId,
@@ -1426,6 +1446,10 @@ class SupabaseService extends ChangeNotifier {
       'p_days': days,
       if (amountPaid != null) 'p_amount_paid': amountPaid,
     });
+    // Store auth_phone for phone-series AI profiles
+    if (authPhone != null && authPhone.isNotEmpty) {
+      await _client.from('proposals').update({'auth_phone': authPhone}).eq('id', userId);
+    }
     notifyListeners();
   }
 
@@ -1446,11 +1470,31 @@ class SupabaseService extends ChangeNotifier {
 
   Future<void> restoreUser(String userId, String? deletedFrom) async {
     final status = deletedFrom == 'users' ? 'active' : 'pending';
-    await _client.from('proposals').update({
-      'status': status,
-      'deleted_from': null,
-      'deletion_reason': null,
-    }).eq('id', userId);
+    final row = await _client.from('proposals')
+        .select('deletion_reason')
+        .eq('id', userId)
+        .maybeSingle();
+    final reason = row?['deletion_reason'] as String?;
+    final wasArchived = reason == 'was_archived';
+    final wasViewOnly = reason == 'was_viewonly';
+
+    if (wasViewOnly) {
+      // Restore to View Only state: active + doc_pending + not archived
+      await _client.from('proposals').update({
+        'status': 'active',
+        'subscription_status': 'doc_pending',
+        'deleted_from': null,
+        'deletion_reason': null,
+        'is_order_archived': false,
+      }).eq('id', userId);
+    } else {
+      await _client.from('proposals').update({
+        'status': status,
+        'deleted_from': null,
+        'deletion_reason': null,
+        'is_order_archived': wasArchived,
+      }).eq('id', userId);
+    }
     notifyListeners();
   }
 
@@ -1627,6 +1671,27 @@ class SupabaseService extends ChangeNotifier {
         .update({'amount_paid': current + (credits * pricePerCredit)})
         .eq('id', userId);
     notifyListeners();
+  }
+
+  /// Manually adjusts a user's cumulative spend by [delta] — positive to add,
+  /// negative to subtract — from the admin's "Spent" chip on the Users
+  /// screen. Persists straight to proposals.amount_paid, the same column
+  /// totalSpending (per-user) and allTimeRevenue (summed across all users)
+  /// both read from, so all-time revenue reflects the change with no extra
+  /// bookkeeping. Result is clamped to zero — spend never goes negative.
+  /// Returns the new total so the caller can update its local cache.
+  Future<double> adjustUserSpending(String userId, double delta) async {
+    final row = await _client.from('proposals')
+        .select('amount_paid')
+        .eq('id', userId)
+        .single();
+    final current = (row['amount_paid'] as num?)?.toDouble() ?? 0;
+    final updated = (current + delta).clamp(0, double.infinity).toDouble();
+    await _client.from('proposals')
+        .update({'amount_paid': updated})
+        .eq('id', userId);
+    notifyListeners();
+    return updated;
   }
 
   Future<void> removeFeaturedCredits(String userId, int credits) async {

@@ -87,7 +87,7 @@ class AdminPerms extends ChangeNotifier {
 
   String? accountId;
   String accountName = '';
-  String accountCnic = '';
+  String accountPhone = '';
   bool isSuper = false;
   Map<String, String> _map = {};
 
@@ -102,7 +102,7 @@ class AdminPerms extends ChangeNotifier {
   }) {
     accountId = id;
     accountName = name;
-    accountCnic = cnic;
+    accountPhone = cnic;
     this.isSuper = isSuper;
     _map = Map<String, String>.from(permissions);
     notifyListeners();
@@ -111,7 +111,7 @@ class AdminPerms extends ChangeNotifier {
   void clear() {
     accountId = null;
     accountName = '';
-    accountCnic = '';
+    accountPhone = '';
     isSuper = false;
     _map = {};
     notifyListeners();

@@ -26,6 +26,12 @@ class AdminService extends ChangeNotifier {
   dynamic get client => _db.client;
 
   List<AdminUser> _users = [];
+
+  // ── AI users: separate list, loaded lazily 30 at a time ──────────────────
+  List<AdminUser> _aiUsers = [];
+  int  _aiPage = 0;
+  bool _aiUsersLoading = false;
+  bool _aiAllLoaded = false;
   List<ActivationCode> _codes = [];
   List<AdminAccount> _adminAccounts = [];
   bool _isLoggedIn = false;
@@ -103,7 +109,11 @@ class AdminService extends ChangeNotifier {
   AdminAccount? _currentAccount;
   AdminAccount? get currentAccount => _currentAccount;
 
-  List<AdminUser> get users => List.unmodifiable(_users);
+  List<AdminUser> get users        => List.unmodifiable(_users);
+  List<AdminUser> get aiUsers      => List.unmodifiable(_aiUsers);
+  bool get aiUsersLoading          => _aiUsersLoading;
+  bool get aiAllLoaded             => _aiAllLoaded;
+  int  get aiTotalCount            => _aiUsers.length;
   List<ActivationCode> get codes => List.unmodifiable(_codes);
   List<AdminAccount> get adminAccounts => List.unmodifiable(_adminAccounts);
   bool get isLoggedIn => _isLoggedIn;
@@ -113,17 +123,28 @@ class AdminService extends ChangeNotifier {
   int get affiliateTrashCount => _affiliateTrashCount;
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  //  CNIC + password, checked against admin_accounts. Returns:
+  //  phone + password, checked against admin_accounts. Returns:
   //    null            → signed in
-  //    'invalid'       → wrong CNIC or password
+  //    'invalid'       → wrong phone or password
   //    'offline'       → could not reach the server
-  Future<String?> loginWithCredentials(String cnic, String password) async {
+  Future<String?> loginWithCredentials(String phone, String password) async {
     Map<String, dynamic>? row;
     try {
-      row = await _db.adminPanelLogin(cnic, password);
+      row = await _db.adminPanelLogin(phone, password);
+    } on Exception catch (e) {
+      final msg = e.toString().toLowerCase();
+      // Network/socket errors → offline; auth errors → invalid
+      if (msg.contains('socket') || msg.contains('network') ||
+          msg.contains('connection') || msg.contains('timeout') ||
+          msg.contains('unreachable')) {
+        debugPrint('[loginWithCredentials] offline: $e');
+        return 'offline';
+      }
+      debugPrint('[loginWithCredentials] invalid credentials: $e');
+      return 'invalid';
     } catch (e) {
       debugPrint('[loginWithCredentials] error: $e');
-      return 'offline';
+      return 'invalid';
     }
     if (row == null) return 'invalid';
 
@@ -131,7 +152,9 @@ class AdminService extends ChangeNotifier {
     _currentAccount = AdminAccount(
       id: row['id'] as String,
       name: (row['name'] as String?) ?? 'Admin',
-      cnic: (row['cnic'] as String?) ?? '',
+      // admin_panel_login RPC returns phone value under key 'cnic' for
+      // backward compat with older clients — read it correctly here.
+      phone: (row['cnic'] as String? ?? row['phone'] as String? ?? ''),
       password: '',
       createdAt: DateTime.now(),
       isSuper: row['is_super'] == true,
@@ -141,7 +164,7 @@ class AdminService extends ChangeNotifier {
     AdminPerms.i.apply(
       id: _currentAccount!.id,
       name: _currentAccount!.name,
-      cnic: _currentAccount!.cnic,
+      cnic: _currentAccount!.phone, // AdminPerms.accountCnic stores phone now
       isSuper: _currentAccount!.isSuper,
       permissions: permissions,
     );
@@ -176,6 +199,10 @@ class AdminService extends ChangeNotifier {
     _currentAccount = null;
     AdminPerms.i.clear();
     _users = [];
+    _aiUsers = [];
+    _aiPage = 0;
+    _aiUsersLoading = false;
+    _aiAllLoaded = false;
     _codes = [];
     _syncChannel?.unsubscribe();
     _syncChannel = null;
@@ -212,6 +239,28 @@ class AdminService extends ChangeNotifier {
     return future;
   }
 
+  // ── AI lazy loader: called when admin opens AI tab ───────────────────────
+  // First call loads page 0. Scroll in AI tab triggers subsequent pages.
+  Future<void> loadAIUsersIfNeeded() async {
+    if (_aiAllLoaded || _aiUsersLoading) return;
+    _aiUsersLoading = true;
+    notifyListeners();
+    try {
+      final page = await _db.fetchAIUsers(page: _aiPage);
+      for (final u in page) {
+        final idx = _aiUsers.indexWhere((e) => e.id == u.id);
+        if (idx != -1) _aiUsers[idx] = u; else _aiUsers.add(u);
+      }
+      _aiPage++;
+      if (page.length < 30) _aiAllLoaded = true;
+    } catch (e) {
+      debugPrint('[AdminService] loadAIUsers error: $e');
+    } finally {
+      _aiUsersLoading = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> _loadDataImpl() async {
     final requestId = ++_loadRequestId;
     _loading = true;
@@ -238,7 +287,7 @@ class AdminService extends ChangeNotifier {
       List<AdminUser> freshUsers;
       if (isFirstLoad) {
         // First load — fetch everything via the summary view (1 call).
-        freshUsers = await _db.fetchAdminUsers();
+        freshUsers = await _db.fetchRealAdminUsers(); // boot: real users only, AI loaded lazily
       } else {
         // Incremental refresh — only rows changed since last sync.
         // Typically 0–10 rows instead of 2341, so this feels instant.
@@ -251,14 +300,24 @@ class AdminService extends ChangeNotifier {
         // Replace full list on first load.
         _users = freshUsers.map((u) => _applyPendingOps(u)).toList();
       } else {
-        // Merge changed rows into existing list — add new, update existing.
-        final updatedIds = freshUsers.map((u) => u.id).toSet();
+        // Split incremental results: real → _users, AI → _aiUsers (if loaded)
+        final realChanged = freshUsers.where((u) =>
+            u.adminNotes != 'AI_IMPORTED' && u.submissionSource != 'ai_batch').toList();
+        final aiChanged = freshUsers.where((u) =>
+            u.adminNotes == 'AI_IMPORTED' || u.submissionSource == 'ai_batch').toList();
+        final updatedIds = realChanged.map((u) => u.id).toSet();
         _users = [
           ..._users.where((u) => !updatedIds.contains(u.id)),
-          ...freshUsers.map((u) => _applyPendingOps(u)),
+          ...realChanged.map((u) => _applyPendingOps(u)),
         ];
-        // Re-sort by updated_at desc to keep order consistent.
         _users.sort((a, b) => b.postedAt.compareTo(a.postedAt));
+        // Only update AI list if already loaded — don't force-load
+        if (_aiUsers.isNotEmpty) {
+          for (final u in aiChanged) {
+            final idx = _aiUsers.indexWhere((e) => e.id == u.id);
+            if (idx != -1) _aiUsers[idx] = u;
+          }
+        }
       }
 
       _lastSyncTime = syncStarted;
@@ -289,7 +348,9 @@ class AdminService extends ChangeNotifier {
       return u.copyWith(status: ProposalStatus.deleted);
     }
     if (_pendingRestoreStatus.containsKey(u.id)) {
-      return u.copyWith(status: _pendingRestoreStatus[u.id], deletedFrom: null);
+      // Once DB confirms the row is no longer deleted, clear the guard
+      if (u.status != ProposalStatus.deleted) _pendingRestoreStatus.remove(u.id);
+      return u.copyWith(status: _pendingRestoreStatus[u.id] ?? u.status, deletedFrom: null);
     }
     return u;
   }
@@ -513,26 +574,65 @@ class AdminService extends ChangeNotifier {
     _pendingDeleteIds.add(userId);
     // Optimistically update local state first so UI removes the card immediately
     final idx = _users.indexWhere((u) => u.id == userId);
-    if (idx != -1) {
-      _users[idx] = _users[idx].copyWith(status: ProposalStatus.deleted, deletedFrom: from);
-      notifyListeners();
-    }
+    if (idx != -1) { _users[idx] = _users[idx].copyWith(status: ProposalStatus.deleted, deletedFrom: from); notifyListeners(); }
+    final aiIdx = _aiUsers.indexWhere((u) => u.id == userId);
+    if (aiIdx != -1) { _aiUsers[aiIdx] = _aiUsers[aiIdx].copyWith(status: ProposalStatus.deleted, deletedFrom: from); notifyListeners(); }
     await _db.deleteUser(userId, from: from);
     // Keep in _pendingDeleteIds — loadData() will clean it up once DB confirms deleted status
+  }
+
+  // Updates local state only — used when the caller has already written to
+  // the DB directly (e.g. archived-profile reject which also clears
+  // is_order_archived in the same call).
+  void markDeleted(String userId, {String from = 'orders'}) {
+    _pendingDeleteIds.add(userId);
+    final idx = _users.indexWhere((u) => u.id == userId);
+    if (idx != -1) {
+      _users[idx] = _users[idx].copyWith(
+        status: ProposalStatus.deleted,
+        deletedFrom: from,
+        isOrderArchived: false,
+      );
+      notifyListeners();
+    }
+  }
+
+  // Optimistically moves a card to Pending in local state immediately —
+  // used by the Restore button on Archived and View Only cards so the card
+  // disappears without waiting for the next loadData() cycle.
+  void markRestoredToPending(String userId) {
+    _pendingRestoreStatus[userId] = ProposalStatus.pending;
+    final idx = _users.indexWhere((u) => u.id == userId);
+    if (idx != -1) {
+      _users[idx] = _users[idx].copyWith(
+        status: ProposalStatus.pending,
+        deletedFrom: null,
+        isOrderArchived: false,
+      );
+      notifyListeners();
+    }
   }
 
   Future<void> restoreUser(String userId, [String? from]) async {
     final idx = _users.indexWhere((u) => u.id == userId);
     if (idx == -1) return;
     from ??= _users[idx].deletedFrom;
+    final wasArchived = _users[idx].deletionReason == 'was_archived';
+    final wasViewOnly = _users[idx].deletionReason == 'was_viewonly';
     final status = from == 'users' ? ProposalStatus.active : ProposalStatus.pending;
-    // Guard against loadData() reverting this during the DB write
-    _pendingRestoreStatus[userId] = status;
-    // Optimistically update local state first so card disappears immediately
-    _users[idx] = _users[idx].copyWith(status: status, deletedFrom: null);
+    final restoredStatus = wasViewOnly ? ProposalStatus.active : status;
+    // Keep in _pendingRestoreStatus until loadData confirms the new status —
+    // same pattern as _pendingDeleteIds so incremental fetches don't revert it.
+    _pendingRestoreStatus[userId] = restoredStatus;
+    _users[idx] = _users[idx].copyWith(
+      status: restoredStatus,
+      deletedFrom: null,
+      isOrderArchived: wasArchived,
+    );
     notifyListeners();
     await _db.restoreUser(userId, from);
-    _pendingRestoreStatus.remove(userId);
+    // Don't remove here — _applyPendingOps will clear it once loadData
+    // fetches the row with the confirmed non-deleted status.
   }
 
   Future<bool> deleteUserByNumber(int number) async {
@@ -560,6 +660,7 @@ class AdminService extends ChangeNotifier {
     // comment in deleteUserByNumber above for why.
     await _db.permanentlyDeleteUser(userId);
     _users.removeWhere((u) => u.id == userId);
+    _aiUsers.removeWhere((u) => u.id == userId);
     await _reloadOffsets();
     notifyListeners();
   }
@@ -633,12 +734,12 @@ class AdminService extends ChangeNotifier {
       // so the change takes effect without a re-login.
       if (_currentAccount?.id == id) {
         _currentAccount = AdminAccount(
-          id: id, name: name, cnic: cnic.replaceAll('-', ''), password: '',
+          id: id, name: name, phone: cnic.trim(), password: '',
           createdAt: _currentAccount!.createdAt,
           isSuper: isSuper, permissions: permissions,
         );
         AdminPerms.i.apply(
-          id: id, name: name, cnic: cnic.replaceAll('-', ''),
+          id: id, name: name, cnic: cnic.trim(),
           isSuper: isSuper, permissions: permissions,
         );
       }
@@ -698,6 +799,24 @@ class AdminService extends ChangeNotifier {
       totalSpending: _users[idx].totalSpending + (credits * pricePerCredit.toDouble()),
     );
     notifyListeners();
+  }
+
+  // Manual admin spend adjustment (+/-) from the Users screen "Spent" chip.
+  // Applies instantly: updates the local cache so allTimeRevenue — derived
+  // live as a sum over _users' totalSpending — reflects it right away, then
+  // re-pulls monthlyRevenue from the server so the current month's figure
+  // moves too, without waiting for a full dashboard refresh.
+  Future<double> adjustUserSpending(String userId, double delta) async {
+    final newTotal = await _db.adjustUserSpending(userId, delta);
+    final idx = _users.indexWhere((u) => u.id == userId);
+    if (idx != -1) {
+      _users[idx] = _users[idx].copyWith(totalSpending: newTotal);
+    }
+    try {
+      _cachedMonthlyRevenue = await _db.fetchMonthlyRevenue();
+    } catch (_) {}
+    notifyListeners();
+    return newTotal;
   }
 
   void removeFeaturedCredits(String userId, int credits) {
@@ -763,18 +882,16 @@ class AdminService extends ChangeNotifier {
   // ── Internal helpers ──────────────────────────────────────────────────────
   void _replaceUser(AdminUser updated) {
     final idx = _users.indexWhere((u) => u.id == updated.id);
-    if (idx != -1) {
-      _users[idx] = updated;
-      notifyListeners();
-    }
+    if (idx != -1) { _users[idx] = updated; notifyListeners(); return; }
+    final aiIdx = _aiUsers.indexWhere((u) => u.id == updated.id);
+    if (aiIdx != -1) { _aiUsers[aiIdx] = updated; notifyListeners(); }
   }
 
   void _setStatus(String userId, ProposalStatus status) {
     final idx = _users.indexWhere((u) => u.id == userId);
-    if (idx != -1) {
-      _users[idx] = _users[idx].copyWith(status: status);
-      notifyListeners();
-    }
+    if (idx != -1) { _users[idx] = _users[idx].copyWith(status: status); notifyListeners(); return; }
+    final aiIdx = _aiUsers.indexWhere((u) => u.id == userId);
+    if (aiIdx != -1) { _aiUsers[aiIdx] = _aiUsers[aiIdx].copyWith(status: status); notifyListeners(); }
   }
 
   // ── Realtime sync — keeps every admin's view current ──────────────────────

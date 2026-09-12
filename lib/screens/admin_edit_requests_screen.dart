@@ -142,7 +142,7 @@ class EditRequest {
     return EditRequest(
       proposalId: proposalId,
       proposalName: proposalMeta['name'] as String? ?? 'Unknown',
-      proposalCnic: proposalMeta['cnic'] as String? ?? '',
+      proposalCnic: proposalMeta['auth_phone'] as String? ?? '',
       proposalNumber: proposalMeta['proposal_number'] as int? ?? 0,
       currentData: proposalMeta,
       events: events,
@@ -403,7 +403,7 @@ class _AdminEditRequestsScreenState extends State<AdminEditRequestsScreen> {
       // current live diff can be computed client-side.
       final data = await _supabase
           .from('profile_edit_requests')
-          .select('*, proposals(name, city, cnic, proposal_number, *)')
+          .select('*, proposals(name, city, auth_phone, proposal_number)')
           .order('submitted_at', ascending: true)
           .limit(1000);
 

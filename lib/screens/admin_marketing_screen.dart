@@ -147,9 +147,10 @@ class AdminMarketingScreenState extends State<AdminMarketingScreen> {
     if (!AdminPerms.i.canEdit(AdminPageKeys.marketing)) return;
     if (mounted) setState(() => _syncing = true);
     try {
+      // Include auth_phone — the WhatsApp/login number, often different from contact_phone
       final rows = await _client
           .from('proposals')
-          .select('contact_phone, contact_phone_2, name, proposal_number')
+          .select('contact_phone, contact_phone_2, auth_phone, name, proposal_number')
           .not('contact_phone', 'is', null)
           .neq('contact_phone', '') as List;
 
@@ -162,17 +163,37 @@ class AdminMarketingScreenState extends State<AdminMarketingScreen> {
 
       final toInsert = <Map<String, dynamic>>[];
       for (final row in rows) {
-        final p1 = _normalise(row['contact_phone'] as String? ?? '');
-        final p2 = _normalise(row['contact_phone_2'] as String? ?? '');
         final name = row['name'] as String?;
         final pNum = row['proposal_number'] as int?;
-        if (p1.isNotEmpty && !existingPhones.contains(p1)) {
-          existingPhones.add(p1);
-          toInsert.add({'phone': p1, 'name': name, 'proposal_number': pNum, 'marked_done': false});
+
+        // All 3 phone numbers for this user — deduplicated
+        final phones = <String>{
+          _normalise(row['contact_phone'] as String? ?? ''),
+          _normalise(row['contact_phone_2'] as String? ?? ''),
+          _normalise(row['auth_phone'] as String? ?? ''),
+        }.where((p) => p.isNotEmpty);
+
+        for (final phone in phones) {
+          if (!existingPhones.contains(phone)) {
+            existingPhones.add(phone);
+            toInsert.add({'phone': phone, 'name': name, 'proposal_number': pNum, 'marked_done': false});
+          }
         }
-        if (p2.isNotEmpty && !existingPhones.contains(p2)) {
-          existingPhones.add(p2);
-          toInsert.add({'phone': p2, 'name': name, 'proposal_number': pNum, 'marked_done': false});
+      }
+
+      // Also sync affiliate phone numbers
+      final affiliateRows = await _client
+          .from('affiliates')
+          .select('phone, name')
+          .not('phone', 'is', null)
+          .neq('phone', '')
+          .or('deleted.is.null,deleted.eq.false') as List;
+      for (final row in affiliateRows) {
+        final phone = _normalise(row['phone'] as String? ?? '');
+        final name = row['name'] as String?;
+        if (phone.isNotEmpty && !existingPhones.contains(phone)) {
+          existingPhones.add(phone);
+          toInsert.add({'phone': phone, 'name': name, 'proposal_number': null, 'marked_done': false});
         }
       }
 

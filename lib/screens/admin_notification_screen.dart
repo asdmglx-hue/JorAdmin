@@ -47,7 +47,7 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
       final res = await _client
           .from('notification_log')
           .select()
-          .eq('type', 'new_order')
+          .isFilter('proposal_id', null)  // admin-targeted: no proposal_id
           .order('created_at', ascending: false)
           .limit(50);
       final rows = (res as List).cast<Map<String, dynamic>>();
@@ -103,7 +103,7 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
     try {
       debugPrint('[NOTIF_CLEAR] Starting clear all...');
       debugPrint('[NOTIF_CLEAR] Total rows to delete: ${_history.length}');
-      final result = await _client.from('notification_log').delete().eq('type', 'new_order').select();
+      final result = await _client.from('notification_log').delete().isFilter('proposal_id', null).select();
       debugPrint('[NOTIF_CLEAR] Delete result: ${result.length} rows deleted');
       if (mounted) setState(() { _history = []; _visibleCount = _kPageSize; });
       debugPrint('[NOTIF_CLEAR] UI cleared');
@@ -131,6 +131,18 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
     if (diffDays == 0) return 'Today';
     if (diffDays == 1) return 'Yesterday';
     return '${_kMonths[t.month - 1]} ${t.day}, ${t.year}';
+  }
+
+  IconData _iconForType(String title) {
+    if (title.contains('Document') || title.contains('Doc') || title.contains('Verification')) return Icons.article_rounded;
+    if (title.contains('Payment') || title.contains('Proof')) return Icons.payment_rounded;
+    return Icons.person_add_rounded;
+  }
+
+  Color _colorForType(String title) {
+    if (title.contains('Document') || title.contains('Doc') || title.contains('Verification')) return const Color(0xFF0369A1);
+    if (title.contains('Payment') || title.contains('Proof')) return const Color(0xFF16A34A);
+    return kPurple;
   }
 
   @override
@@ -251,11 +263,10 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
             width: 38,
             height: 38,
             decoration: BoxDecoration(
-              color: kPurple.withOpacity(0.15),
+              color: _colorForType(n.title),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.notifications_rounded,
-                color: kPurple, size: 18),
+            child: Center(child: Icon(_iconForType(n.title), color: Colors.white, size: 18)),
           ),
           const SizedBox(width: 12),
           Expanded(

@@ -19,7 +19,7 @@ class BiometricService {
     iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
   );
 
-  static const _keyCnic     = 'bio_admin_cnic';
+  static const _keyCnic = 'bio_admin_phone' // renamed from bio_admin_cnic;
   static const _keyPassword = 'bio_admin_password';
   static const _keyEnabled  = 'bio_admin_enabled';
 

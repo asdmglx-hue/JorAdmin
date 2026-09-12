@@ -15,7 +15,7 @@ class NotificationBellWidget {
       final res = await _client
           .from('notification_log')
           .select('id, read_at')
-          .eq('type', 'new_order');
+          .isFilter('proposal_id', null); // admin-targeted notifications only
       return (res as List).where((e) => e['read_at'] == null).length;
     } catch (_) {
       return 0;

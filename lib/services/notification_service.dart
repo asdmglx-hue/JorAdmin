@@ -198,6 +198,14 @@ class NotificationService extends ChangeNotifier with WidgetsBindingObserver {
     await refresh();
   }
 
+  // ── Admin-only: show tray without user-app refresh() ────────────────────
+  // Used by the admin app foreground FCM handler. The admin app has no
+  // proposal_id in SharedPreferences so refresh() exits early and does
+  // nothing — call this instead to just show the banner + sound.
+  Future<void> showTrayOnly(String title, String body) async {
+    await _showTray(title, body);
+  }
+
   // ── Bell / history maintenance ───────────────────────────────────────────
   Future<void> markAllRead() async {
     final unread = _history.where((n) => !n.read).toList();

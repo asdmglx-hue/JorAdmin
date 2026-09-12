@@ -72,7 +72,8 @@ class AdminEditUserScreen extends StatefulWidget {
   final AdminUser user;
   final AdminService svc;
   final bool readOnly;
-  const AdminEditUserScreen({super.key, required this.user, required this.svc, this.readOnly = false});
+  final bool fromOrderScreen;
+  const AdminEditUserScreen({super.key, required this.user, required this.svc, this.readOnly = false, this.fromOrderScreen = false});
 
   @override
   State<AdminEditUserScreen> createState() => _AdminEditUserScreenState();
@@ -88,13 +89,15 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   // country picker in the user app).
   CountryCode _selectedCountry = CountryCode.pakistan;
   CountryCode _selectedCountry2 = CountryCode.pakistan;
+  CountryCode _selectedCountryAuth = CountryCode.pakistan;
 
   // Text controllers
   late TextEditingController _nameCtrl;
   late TextEditingController _ageCtrl;
   late TextEditingController _phoneCtrl;
   late TextEditingController _phone2Ctrl;
-  late TextEditingController _cnicCtrl;
+  late TextEditingController _authPhoneCtrl;
+
   late TextEditingController _passwordCtrl;
   late TextEditingController _heightCtrl;
   late TextEditingController _weightCtrl;
@@ -112,7 +115,6 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   late TextEditingController _carCtrl;
   late TextEditingController _brothersCtrl;
   late TextEditingController _sistersCtrl;
-  late TextEditingController _adminNotesCtrl;
   late TextEditingController _locationCtrl;
   late TextEditingController _countryCtrl;
   late TextEditingController _disabilityDetailsCtrl;
@@ -196,7 +198,21 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     }
     if (_selectedCountry2.dialCode == '+92') _phone2Ctrl.text = _formatPakDisplay(_phone2Ctrl.text);
 
-    _cnicCtrl     = TextEditingController(text: formatCnicDisplay(_user.cnic ?? ''));
+    // Auth phone — parse country code from stored value (e.g. +923714155170)
+    final authRaw = _user.authPhone ?? '';
+    if (authRaw.isNotEmpty) {
+      final authDigits = authRaw.replaceAll(RegExp(r'[^\d]'), '');
+      if (authDigits.startsWith('92')) {
+        _selectedCountryAuth = CountryCode.pakistan;
+        _authPhoneCtrl = TextEditingController(text: _formatPakDisplay(authDigits.substring(2)));
+      } else {
+        _authPhoneCtrl = TextEditingController(text: authRaw);
+      }
+    } else {
+      _authPhoneCtrl = TextEditingController();
+    }
+
+
     _passwordCtrl = TextEditingController(text: _user.password ?? '');
     // Height: store inches internally, display as feet/inches in read-only
     final h = _user.heightInches.round();
@@ -217,7 +233,6 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     _carCtrl      = TextEditingController(text: _user.carName ?? '');
     _brothersCtrl = TextEditingController(text: (_user.brothers == 0 || _user.brothers == null) ? '' : _user.brothers.toString());
     _sistersCtrl  = TextEditingController(text: (_user.sisters == 0 || _user.sisters == null) ? '' : _user.sisters.toString());
-    _adminNotesCtrl  = TextEditingController(text: _user.adminNotes ?? '');
     _locationCtrl = TextEditingController(text: _user.location ?? '');
     _countryCtrl = TextEditingController(text: _user.country ?? '');
     _disabilityDetailsCtrl = TextEditingController(text: _user.disabilityDetails ?? '');
@@ -239,11 +254,11 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     _disabilityVal = _user.hasDisability ?? '';
 
     for (final c in [
-      _nameCtrl, _ageCtrl, _phoneCtrl, _phone2Ctrl, _cnicCtrl, _passwordCtrl, _heightCtrl, _weightCtrl,
+      _nameCtrl, _ageCtrl, _phoneCtrl, _phone2Ctrl, _authPhoneCtrl, _passwordCtrl, _heightCtrl, _weightCtrl,
       _aboutCtrl, _lookingForCtrl, _instCtrl, _degreeTitleCtrl, _inst2Ctrl, _degreeTitle2Ctrl,
       _inst3Ctrl, _degreeTitle3Ctrl, _boysCtrl, _girlsCtrl, _houseSizeCtrl, _carCtrl,
       _brothersCtrl, _sistersCtrl,
-      _adminNotesCtrl, _locationCtrl, _disabilityDetailsCtrl, _countryCtrl,
+      _locationCtrl, _disabilityDetailsCtrl, _countryCtrl,
       _professionCtrl, _professionCustomCtrl, _fatherOccCtrl, _motherOccCtrl,
     ]) { c.addListener(_onFieldChanged); }
   }
@@ -269,21 +284,24 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       // Patch in the full profile data that wasn't in the summary view.
       // Controllers are only updated if the admin hasn't started editing
       // them yet (_hasChanges is still false at this point on fresh open).
+      // Always update password from fresh data — the summary object passed in
+      // at open time may not have it yet. Remove listener first so this doesn't
+      // activate the Save button spuriously.
+      _passwordCtrl.removeListener(_onFieldChanged);
+      _passwordCtrl.text = fresh.password ?? '';
+      _passwordCtrl.addListener(_onFieldChanged);
+
       if (!_fullDataLoaded) {
           // Temporarily remove listeners so controller updates don't trigger
           // _onFieldChanged and falsely activate the Save button.
           final ctrls = [
-            _nameCtrl, _ageCtrl, _phoneCtrl, _phone2Ctrl, _cnicCtrl, _passwordCtrl, _heightCtrl, _weightCtrl,
+            _nameCtrl, _ageCtrl, _phoneCtrl, _phone2Ctrl, _authPhoneCtrl, _passwordCtrl, _heightCtrl, _weightCtrl,
             _aboutCtrl, _lookingForCtrl, _instCtrl, _degreeTitleCtrl, _inst2Ctrl, _degreeTitle2Ctrl,
             _inst3Ctrl, _degreeTitle3Ctrl, _boysCtrl, _girlsCtrl, _houseSizeCtrl, _carCtrl,
-            _brothersCtrl, _sistersCtrl, _adminNotesCtrl, _locationCtrl, _disabilityDetailsCtrl,
+            _brothersCtrl, _sistersCtrl, _locationCtrl, _disabilityDetailsCtrl,
             _countryCtrl, _professionCtrl, _professionCustomCtrl, _fatherOccCtrl, _motherOccCtrl,
-            _passwordCtrl,
           ];
           for (final c in ctrls) c.removeListener(_onFieldChanged);
-
-          // Always update password from fresh data regardless of _fullDataLoaded
-          _passwordCtrl.text = fresh.password ?? '';
 
           _ageCtrl.text = fresh.age.toString();
           _aboutCtrl.text = fresh.about ?? '';
@@ -340,11 +358,11 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   @override
   void dispose() {
     for (final c in [
-      _nameCtrl, _ageCtrl, _phoneCtrl, _phone2Ctrl, _cnicCtrl, _passwordCtrl, _heightCtrl, _weightCtrl,
+      _nameCtrl, _ageCtrl, _phoneCtrl, _phone2Ctrl, _authPhoneCtrl, _passwordCtrl, _heightCtrl, _weightCtrl,
       _aboutCtrl, _lookingForCtrl, _instCtrl, _degreeTitleCtrl, _inst2Ctrl, _degreeTitle2Ctrl,
       _inst3Ctrl, _degreeTitle3Ctrl, _boysCtrl, _girlsCtrl, _houseSizeCtrl, _carCtrl,
       _brothersCtrl, _sistersCtrl,
-      _adminNotesCtrl, _locationCtrl, _disabilityDetailsCtrl, _countryCtrl,
+      _locationCtrl, _disabilityDetailsCtrl, _countryCtrl,
       _professionCtrl, _professionCustomCtrl, _fatherOccCtrl, _motherOccCtrl,
     ]) { c.dispose(); }
     _proposalSub?.unsubscribe();
@@ -362,7 +380,8 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       age: int.tryParse(_ageCtrl.text) ?? _user.age,
       contactPhone: formatDialedPhone(_selectedCountry.dialCode, _phoneCtrl.text),
       contactPhone2: _phone2Ctrl.text.trim().isEmpty ? null : formatDialedPhone(_selectedCountry2.dialCode, _phone2Ctrl.text),
-      cnic: _cnicCtrl.text.trim().isEmpty ? null : _cnicCtrl.text.trim(),
+      authPhone: _authPhoneCtrl.text.trim().isEmpty ? null : (_selectedCountryAuth.dialCode + _authPhoneCtrl.text.trim().replaceAll(RegExp(r'[^\d]'), '')),
+      cnic: _user.cnic,
       password: _passwordCtrl.text.trim().isEmpty ? null : _passwordCtrl.text.trim(),
       heightInches: () {
         final t = _heightCtrl.text.trim();
@@ -394,7 +413,8 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       physicallyActive: _user.physicallyActive,
       brothers: int.tryParse(_brothersCtrl.text) ?? _user.brothers,
       sisters: int.tryParse(_sistersCtrl.text) ?? _user.sisters,
-      adminNotes: _adminNotesCtrl.text.trim().isEmpty ? null : _adminNotesCtrl.text.trim(),
+      adminNotes: _user.adminNotes,
+      submitterType: _user.submitterType,
       location: _locationCtrl.text.trim().isEmpty ? null : _locationCtrl.text.trim(),
       country: _countryCtrl.text.trim().isEmpty ? null : _countryCtrl.text.trim(),
       disabilityDetails: _disabilityDetailsCtrl.text.trim().isEmpty ? null : _disabilityDetailsCtrl.text.trim(),
@@ -418,7 +438,6 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
   Map<String, dynamic> _normalizedForCompare(Map<String, dynamic> json) {
     final m = Map<String, dynamic>.from(json);
-    if (m['cnic'] is String) m['cnic'] = (m['cnic'] as String).replaceAll('-', '');
     for (final k in ['contact_phone', 'contact_phone_2']) {
       if (m[k] is String) m[k] = _phoneCompareKey(m[k] as String);
     }
@@ -428,10 +447,15 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   bool get _hasChanges {
     final a = jsonEncode(_normalizedForCompare(_buildUpdated().toUpdateJson()));
     final b = jsonEncode(_normalizedForCompare(_baseline.toUpdateJson()));
-    return a != b;
+    if (a != b) return true;
+    // password is not in toUpdateJson() (it lives in phone_accounts, not proposals)
+    // so compare it separately here
+    final newPw = _passwordCtrl.text.trim();
+    final oldPw = _baseline.password?.trim() ?? '';
+    return newPw != oldPw;
   }
 
-  void _save() {
+  Future<void> _save() async {
     // Extra backstop — the screen is already opened read-only for view-only
     // admins, but never let a save through without edit rights on either tab.
     if (!AdminPerms.i.canEdit(AdminPageKeys.users) &&
@@ -441,6 +465,35 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     }
     if (!_hasChanges) return;
     final updated = _buildUpdated();
+    // Save password to phone_accounts if it changed — password is not in
+    // toUpdateJson()/proposals, it lives in phone_accounts joined via auth_phone.
+    final newPw = _passwordCtrl.text.trim();
+    final oldPw = _baseline.password?.trim() ?? '';
+    if (newPw != oldPw && newPw.isNotEmpty) {
+      final phone = updated.authPhone?.isNotEmpty == true
+          ? updated.authPhone!
+          : updated.contactPhone;
+      try {
+        await SupabaseService.instance.client.rpc('set_phone_password', params: {
+          'p_phone': phone,
+          'p_password': newPw,
+        });
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Password could not be saved: $e'),
+            backgroundColor: kRose,
+            duration: const Duration(seconds: 5),
+          ));
+        }
+        return;
+      }
+      // Also ensure auth_phone is set on proposals if it was missing
+      if (updated.authPhone == null || updated.authPhone!.isEmpty) {
+        await SupabaseService.instance.client.from('proposals')
+            .update({'auth_phone': phone}).eq('id', updated.id);
+      }
+    }
     widget.svc.updateUser(updated);
     HapticFeedback.mediumImpact();
     // Stay on screen — update baseline so Save button goes inactive again
@@ -523,10 +576,8 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           if (_phone2Ctrl.text.trim().isNotEmpty)
             _drop('Contact Person (Phone 2)', _user.contactPerson2 ?? '', ['Self', 'Father', 'Mother', 'Brother', 'Sister', 'Husband', 'Wife', 'Son', 'Daughter', 'Uncle', 'Aunt', 'Guardian'],
                 (v) => setState(() => _user = _user.copyWith(contactPerson2: v))),
-          _field('CNIC Number', _cnicCtrl, type: TextInputType.number, formatters: [
-            FilteringTextInputFormatter.allow(RegExp(r'[\d-]')),
-            _AdminCnicFormatter(),
-          ]),
+          _phoneField('Auth Number', _authPhoneCtrl, _selectedCountryAuth, (c) => setState(() => _selectedCountryAuth = c), required: false),
+
           _field('Password', _passwordCtrl, suffix: GestureDetector(
             onTap: () {
               const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -544,7 +595,30 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
           )),
           _drop('Gender', _user.gender, ['Male', 'Female'],
               (v) => setState(() => _user = _user.copyWith(gender: v))),
-          _field('Country', _countryCtrl),
+          _drop(
+              'Submitted For',
+              _user.submitterType == 'self'
+                  ? 'Submitting for myself'
+                  : _user.submitterType == 'guardian'
+                      ? 'Submitting for my son/daughter'
+                      : '',
+              ['Submitting for myself', 'Submitting for my son/daughter'],
+              (v) {
+                final mapped = v == 'Submitting for myself' ? 'self' : 'guardian';
+                setState(() => _user = _user.copyWith(submitterType: mapped));
+              },
+            ),
+          widget.readOnly
+              ? _viewValue('Country', _countryCtrl.text)
+              : Padding(
+                  padding: EdgeInsets.only(bottom: _S.of(context).s(10)),
+                  child: AdminSearchableCountryDropdown(
+                    label: 'Country',
+                    value: _countryCtrl.text.trim().isEmpty ? null : _countryCtrl.text.trim(),
+                    icon: Icons.public_rounded,
+                    onChanged: (v) => setState(() => _countryCtrl.text = v ?? ''),
+                  ),
+                ),
           _cityPicker(),
           _drop('House', _houseVal, ['Own House', 'Rented House'],
               (v) => setState(() { _houseVal = v; _user = _user.copyWith(homeType: v.isEmpty ? null : v); })),
@@ -689,11 +763,29 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
 
           SizedBox(height: _S.of(context).s(4)),
 
-          // ── Payment Proof ─────────────────────────────────────────────────
+          // ── Payment ──────────────────────────────────────────────────────
           SizedBox(height: _S.of(context).s(12)),
-          _mainHeader('Payment Proof'),
+          _mainHeader('Payment'),
           SizedBox(height: _S.of(context).s(10)),
+          // Rishta Profile Payment sub-section
+          _paymentSectionHeader(
+            title: 'Rishta Profile Payment',
+            status: _user.paymentProofStatus,
+            hasDoc: _user.paymentProofUrl?.isNotEmpty ?? false,
+            onSelected: (val) => _onPaymentProofAction(val, _user.paymentProofType ?? 'new'),
+          ),
+          SizedBox(height: _S.of(context).s(8)),
           _buildPaymentProofSection(),
+          SizedBox(height: _S.of(context).s(12)),
+          // Featured Post Payment sub-section
+          _paymentSectionHeader(
+            title: 'Featured Post Payment',
+            status: _user.featuredProofStatus,
+            hasDoc: _user.featuredProofUrl?.isNotEmpty ?? false,
+            onSelected: (val) => _onFeaturedProofAction(val, _user.featuredProofId ?? ''),
+          ),
+          SizedBox(height: _S.of(context).s(8)),
+          _buildFeaturedProofSection(),
           SizedBox(height: _S.of(context).s(4)),
 
           _mainHeader('Additional Information'),
@@ -1107,69 +1199,60 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
             ),
             // Copy icon — puts the ready-made "your proposal is listed"
             // WhatsApp message on the clipboard, with this profile's own
-            // link. Only for AI-uploaded proposals (the same AI_IMPORTED /
-            // ai_batch test the Users screen uses for its AI filter and
-            // long-press approve flow), since the "claim or remove" wording
-            // only makes sense for a profile the person never submitted
-            // themselves. Also hidden when the profile has no number yet,
-            // as the link would be broken.
-            if (_user.proposalNumber != null &&
-                (_user.adminNotes == 'AI_IMPORTED' || _user.submissionSource == 'ai_batch')) ...[
+            // link. Only shown when opened from the Order screen (pending,
+            // archive, or view-only tabs). Hidden on the Users screen.
+            if (widget.fromOrderScreen && _user.proposalNumber != null) ...[ 
               SizedBox(width: s.s(5)),
               GestureDetector(
-                onTap: () {
-                  final message = 'Your rishta proposal is currently listed on Jor.\n\n'
+                onTap: () async {
+                  final isAI = _user.adminNotes == 'AI_IMPORTED' || _user.submissionSource == 'ai_batch';
+                  final number = _user.proposalNumber.toString();
+
+                  // Fallback defaults (mirrors MessageTemplatesCard in content screen)
+                  const aiDefault =
+                      'Your rishta proposal is currently listed on Jor.\n\n'
                       '\u{1F449} View Your Profile:\n'
-                      'https://joronline.com/profile/${_user.proposalNumber}\n\n'
+                      'https://joronline.com/profile/[NUMBER]\n\n'
                       'Reply \u201Cclaim\u201D to manage your profile for free or \u201Cremove\u201D to remove it from Jor.';
+                  const pendingDefault =
+                      'Your marriage proposal is currently listed on Jor\n\n'
+                      '\u{1F517} View your profile:\n'
+                      'https://joronline.com/profile/[NUMBER]\n\n'
+                      'To start your rishta search and connect with families, please complete the verification process by logging in at:\n'
+                      '\u{1F449} https://joronline.com/login\n\n'
+                      'Or download our mobile app:\n'
+                      '\u{1F449} joronline.com/get-android\n\n'
+                      'For any questions, feel free to reply here.\n\n'
+                      'Jor Team\n'
+                      'joronline.com';
+
+                  // Always fetch fresh from app_settings so the copy icon
+                  // reflects whatever the admin last saved in the Content screen.
+                  final settings = await SupabaseService.instance.fetchAppSettings();
+                  final template = isAI
+                      ? (settings['ai_profile_message']      ?? aiDefault)
+                      : (settings['pending_profile_message'] ?? pendingDefault);
+                  final message = template.replaceAll('[NUMBER]', number);
+
                   Clipboard.setData(ClipboardData(text: message));
                   HapticFeedback.lightImpact();
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text('Message copied'),
-                    duration: Duration(seconds: 2),
-                    behavior: SnackBarBehavior.floating,
-                  ));
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Message copied'),
+                      duration: Duration(seconds: 2),
+                      behavior: SnackBarBehavior.floating,
+                    ));
+                  }
                 },
-                child: Container(
-                  padding: EdgeInsets.all(s.s(5)),
-                  decoration: BoxDecoration(color: kPurple.withOpacity(0.18), borderRadius: BorderRadius.circular(7)),
-                  child: Icon(Icons.copy_rounded, size: s.d(15), color: kPurple),
-                ),
-              ),
-            ],
-            // Copy icon for doc_pending profiles — "start your rishta search" message
-            // template, editable from the Content tab in app_settings.
-            if (_user.proposalNumber != null &&
-                _user.subscriptionStatus == SubscriptionStatus.docPending) ...[
-              SizedBox(width: s.s(5)),
-              GestureDetector(
-                onTap: () {
-                  final template = SupabaseService.instance.cachedSettings['pending_profile_message'] ?? '';
-                  final message = template.isNotEmpty
-                      ? template.replaceAll('[NUMBER]', '${_user.proposalNumber}')
-                      : 'Your marriage proposal is currently listed on Jor\n\n'
-                        '\u{1F517} View your profile:\n'
-                        'https://joronline.com/profile/${_user.proposalNumber}\n\n'
-                        'To start your rishta search and connect with families, please complete the verification process by logging in at:\n'
-                        '\u{1F449} https://joronline.com/login\n\n'
-                        'Or download our mobile app:\n'
-                        '\u{1F449} joronline.com/get-android\n\n'
-                        'For any questions, feel free to reply here.\n\n'
-                        'Jor Team\n'
-                        'joronline.com';
-                  Clipboard.setData(ClipboardData(text: message));
-                  HapticFeedback.lightImpact();
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text('Message copied'),
-                    duration: Duration(seconds: 2),
-                    behavior: SnackBarBehavior.floating,
-                  ));
-                },
-                child: Container(
-                  padding: EdgeInsets.all(s.s(5)),
-                  decoration: BoxDecoration(color: kAmber.withOpacity(0.18), borderRadius: BorderRadius.circular(7)),
-                  child: Icon(Icons.copy_rounded, size: s.d(15), color: kAmber),
-                ),
+                child: Builder(builder: (ctx) {
+                  final isAIIcon = _user.adminNotes == 'AI_IMPORTED' || _user.submissionSource == 'ai_batch';
+                  final iconColor = isAIIcon ? kPurple : const Color(0xFFF97316);
+                  return Container(
+                    padding: EdgeInsets.all(s.s(5)),
+                    decoration: BoxDecoration(color: iconColor.withOpacity(0.18), borderRadius: BorderRadius.circular(7)),
+                    child: Icon(Icons.copy_rounded, size: s.d(15), color: iconColor),
+                  );
+                }),
               ),
             ],
             SizedBox(width: s.s(6)),
@@ -1435,23 +1518,31 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
         ]),
       ],
 
-      // ── Profile Manager ──
-      // ── Payment Proof ──
-      if (u.paymentProofUrl != null && u.paymentProofUrl!.isNotEmpty) ...[
+      // ── Payment ──
+      if ((u.paymentProofUrl != null && u.paymentProofUrl!.isNotEmpty) ||
+          (u.featuredProofUrl != null && u.featuredProofUrl!.isNotEmpty)) ...[
         SizedBox(height: s.s(16)),
-        Text('PAYMENT PROOF', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
-        SizedBox(height: s.s(6)),
-        Row(children: [
-          if (u.paymentProofPlan != null) Container(
-            padding: EdgeInsets.symmetric(horizontal: s.s(8), vertical: s.s(3)),
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.07), borderRadius: BorderRadius.circular(s.s(6))),
-            child: Text(u.paymentProofPlan!, style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.6), fontWeight: FontWeight.w600)),
-          ),
-          if (u.paymentProofPlan != null) SizedBox(width: s.s(6)),
-          _paymentProofStatusBadge(u.paymentProofStatus, s),
-        ]),
-        SizedBox(height: s.s(8)),
-        _AdminPhotoSlot(label: 'Payment Receipt', icon: Icons.receipt_long_rounded, photoUrl: u.paymentProofUrl),
+        Text('PAYMENT', style: TextStyle(fontSize: s.f(11.5), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.5))),
+        if (u.paymentProofUrl != null && u.paymentProofUrl!.isNotEmpty) ...[
+          SizedBox(height: s.s(10)),
+          Row(children: [
+            Text('Rishta Profile Payment', style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.8))),
+            SizedBox(width: s.s(8)),
+            _paymentProofStatusBadge(u.paymentProofStatus, s),
+          ]),
+          SizedBox(height: s.s(8)),
+          _AdminPhotoSlot(label: 'Rishta Profile Payment Receipt', icon: Icons.receipt_long_rounded, photoUrl: u.paymentProofUrl),
+        ],
+        if (u.featuredProofUrl != null && u.featuredProofUrl!.isNotEmpty) ...[
+          SizedBox(height: s.s(12)),
+          Row(children: [
+            Text('Featured Post Payment', style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.8))),
+            SizedBox(width: s.s(8)),
+            _paymentProofStatusBadge(u.featuredProofStatus, s),
+          ]),
+          SizedBox(height: s.s(8)),
+          _AdminPhotoSlot(label: 'Featured Payment Receipt', icon: Icons.receipt_long_rounded, photoUrl: u.featuredProofUrl),
+        ],
       ],
 
       // ── Raw Proposal ──
@@ -1579,6 +1670,76 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
   // styling) when one exists and nothing at all when it doesn't; in Edit
   // ── Section heading row: title left, dropdown + status right ─────────────
   // Heading: "PARENT / GUARDIAN / CANDIDATE CNIC"   [dropdown ▾]   Approved ✓
+  // ── Payment section header — same layout as _verificationSectionHeader ──
+  // Title on left, status + dropdown on right. Used for Rishta Profile Payment
+  // and Featured Post Payment, matching the education doc header style.
+  Widget _paymentSectionHeader({
+    required String title,
+    required String? status,
+    required bool hasDoc,
+    required ValueChanged<String> onSelected,
+  }) {
+    final s = _S.of(context);
+    final String resolvedStatus = status ?? 'pending';
+    final Color statusColor = resolvedStatus == 'approved' ? kGreen
+        : resolvedStatus == 'rejected' ? kRose
+        : Colors.white.withOpacity(0.4);
+    final String statusLabel = resolvedStatus == 'approved' ? 'Approved'
+        : resolvedStatus == 'rejected' ? 'Rejected'
+        : 'Pending';
+    final IconData statusIcon = resolvedStatus == 'approved' ? Icons.verified_rounded
+        : resolvedStatus == 'rejected' ? Icons.cancel_rounded
+        : Icons.hourglass_empty_rounded;
+
+    return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      Text(title, style: TextStyle(
+          fontSize: s.f(12.5), fontWeight: FontWeight.w700,
+          color: Colors.white.withOpacity(0.7))),
+      const Spacer(),
+      if (!hasDoc)
+        const SizedBox.shrink()
+      else if (!widget.readOnly)
+        PopupMenuButton<String>(
+          color: const Color(0xFF1E1A33),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          onSelected: onSelected,
+          itemBuilder: (_) => [
+            PopupMenuItem(value: 'approved', child: Row(children: [
+              Icon(Icons.verified_rounded, color: kGreen, size: s.d(16)),
+              SizedBox(width: s.s(8)),
+              Text('Approve', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kGreen)),
+            ])),
+            PopupMenuItem(value: 'rejected', child: Row(children: [
+              Icon(Icons.cancel_rounded, color: kRose, size: s.d(16)),
+              SizedBox(width: s.s(8)),
+              Text('Reject', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kRose)),
+            ])),
+            PopupMenuItem(value: 'clear', child: Row(children: [
+              Icon(Icons.delete_outline_rounded, color: Colors.white54, size: s.d(16)),
+              SizedBox(width: s.s(8)),
+              Text('Clear', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w600, color: Colors.white54)),
+            ])),
+          ],
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(statusIcon, size: s.d(13), color: statusColor),
+            SizedBox(width: s.s(4)),
+            Text(statusLabel, style: TextStyle(
+                fontSize: s.f(12), fontWeight: FontWeight.w700, color: statusColor)),
+            SizedBox(width: s.s(2)),
+            Icon(Icons.keyboard_arrow_down_rounded,
+                size: s.d(16), color: Colors.white.withOpacity(0.45)),
+          ]),
+        )
+      else
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(statusIcon, size: s.d(13), color: statusColor),
+          SizedBox(width: s.s(4)),
+          Text(statusLabel, style: TextStyle(
+              fontSize: s.f(12), fontWeight: FontWeight.w700, color: statusColor)),
+        ]),
+    ]);
+  }
+
   Widget _verificationSectionHeader({
     required String title,
     required List<String> docKeys,
@@ -1757,17 +1918,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               if (val == 'rejected') {
                 SupabaseService.instance.notifyDocRejected(_user.id, docName);
               }
-              // If user is doc_pending and all compulsory docs are now approved,
-              // upgrade subscription_status to 'active' so contacts unlock.
-              if (val == 'approved' && _user.subscriptionStatus == SubscriptionStatus.docPending) {
-                await SupabaseService.instance.checkAndUpgradeDocPending(_user.id, updatedDv);
-                if (_compulsoryDocsApproved(updatedDv)) {
-                  setState(() {
-                    _user = _user.copyWith(subscriptionStatus: SubscriptionStatus.active);
-                    _baseline = _baseline.copyWith(subscriptionStatus: SubscriptionStatus.active);
-                  });
-                }
-              }
+              // Auto-activate removed — admin must use Activate button in Inactive chip.
               // Let the admin know it saved immediately — the dropdown writes
               // directly to the database (no Save button needed).
               if (mounted) {
@@ -1885,18 +2036,7 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       ..addAll({for (final k in docKeys) k: val});
     setState(() => _user = _user.copyWith(docVerification: updatedDv));
     if (val == 'rejected') SupabaseService.instance.notifyDocRejected(_user.id, docName);
-    // If user is doc_pending and all compulsory docs are now approved,
-    // upgrade subscription_status to 'active' so contacts unlock.
-    if (val == 'approved' && _user.subscriptionStatus == SubscriptionStatus.docPending) {
-      await SupabaseService.instance.checkAndUpgradeDocPending(_user.id, updatedDv);
-      // Check if upgrade actually happened (all compulsory docs approved)
-      if (_compulsoryDocsApproved(updatedDv)) {
-        setState(() {
-          _user = _user.copyWith(subscriptionStatus: SubscriptionStatus.active);
-          _baseline = _baseline.copyWith(subscriptionStatus: SubscriptionStatus.active);
-        });
-      }
-    }
+    // Auto-activate removed — admin must use Activate button in Inactive chip.
   }
 
   // ── Payment section (always visible in edit mode) ────────────────────────
@@ -1958,6 +2098,120 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     );
   }
 
+    // ── Featured Post Payment section (edit mode) ────────────────────────────
+  Widget _buildFeaturedProofSection() {
+    final s = _S.of(context);
+    final url    = _user.featuredProofUrl;
+    final proofId = _user.featuredProofId;
+
+    if (url == null || url.isEmpty) {
+      // Edit mode — allow admin to upload proof manually
+      return _EditablePhotoSlot(
+        label: 'Upload Featured Receipt',
+        icon: Icons.receipt_long_rounded,
+        photoUrl: null,
+        cnicOrId: _user.cnic ?? _user.id,
+        photoType: 'featured_proof',
+        onChanged: (newUrl) async {
+          if (newUrl == null) return;
+          // Insert new featured request with proof
+          final res = await SupabaseService.instance.client
+              .from('pending_featured_requests')
+              .insert({
+                'user_id_fk': _user.id,
+                'cnic': _user.authPhone,
+                'selections': [],
+                'total_credits': 0,
+                'total_amount': 0,
+                'proof_url': newUrl,
+                'status': 'pending',
+              })
+              .select('id')
+              .single();
+          setState(() {
+            _user = _user.copyWith(
+              featuredProofUrl: newUrl,
+              featuredProofStatus: 'pending',
+              featuredProofId: res['id'] as String?,
+            );
+            _baseline = _user;
+          });
+        },
+      );
+    }
+
+    return _certField(
+      label: 'Featured Payment Receipt',
+      url: url,
+      cnicOrId: _user.cnic ?? _user.id,
+      photoType: 'featured_proof',
+      onChanged: (newUrl) async {
+        if (newUrl == null) return;
+        final res = await SupabaseService.instance.client
+            .from('pending_featured_requests')
+            .insert({
+              'user_id_fk': _user.id,
+              'cnic': _user.authPhone,
+              'selections': [],
+              'total_credits': 0,
+              'total_amount': 0,
+              'proof_url': newUrl,
+              'status': 'pending',
+            })
+            .select('id')
+            .single();
+        setState(() {
+          _user = _user.copyWith(
+            featuredProofUrl: newUrl,
+            featuredProofStatus: 'pending',
+            featuredProofId: res['id'] as String?,
+          );
+          _baseline = _user;
+        });
+      },
+    );
+  }
+
+  Future<void> _onFeaturedProofAction(String val, String proofId) async {
+    if (val == 'clear') {
+      final confirmed = await _confirmDialog('Clear Featured Proof?', 'This will remove the uploaded screenshot.');
+      if (!confirmed) return;
+      try {
+        await SupabaseService.instance.client.from('pending_featured_requests')
+            .update({'proof_url': null, 'status': null}).eq('id', proofId);
+        setState(() {
+          _user = _user.copyWith(featuredProofUrl: null, featuredProofStatus: null);
+          _baseline = _user;
+        });
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: kRose));
+      }
+      return;
+    }
+    final actionLabel = val == 'approved' ? 'Approve' : 'Reject';
+    final confirmed = await _confirmDialog('$actionLabel Featured Proof?', '$actionLabel this featured payment screenshot?');
+    if (!confirmed) return;
+    try {
+      await SupabaseService.instance.client.from('pending_featured_requests')
+          .update({'status': val}).eq('id', proofId);
+      setState(() {
+        _user = _user.copyWith(featuredProofStatus: val);
+        _baseline = _user;
+      });
+      if (val == 'approved') {
+        // Featured boost scheduling is handled separately via the Featured tab
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Featured proof ${val == 'approved' ? 'approved' : 'rejected'}'),
+          backgroundColor: val == 'approved' ? kGreen : kRose,
+        ));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: kRose));
+    }
+  }
+
     // ── Payment Proof section (edit mode) ────────────────────────────────────
   Widget _buildPaymentProofSection() {
     final s = _S.of(context);
@@ -1995,78 +2249,29 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
       );
     }
 
-    return Container(
-      padding: EdgeInsets.all(s.s(14)),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(s.s(14)),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Plan label + status badge row
-          Row(children: [
-            if (plan.isNotEmpty) Container(
-              padding: EdgeInsets.symmetric(horizontal: s.s(8), vertical: s.s(3)),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.07),
-                borderRadius: BorderRadius.circular(s.s(6)),
-              ),
-              child: Text(plan, style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.6), fontWeight: FontWeight.w600)),
-            ),
-            if (plan.isNotEmpty) SizedBox(width: s.s(8)),
-            _paymentProofStatusBadge(status, s),
-            const Spacer(),
-            // Approve / Reject dropdown — only when pending and admin can edit
-            if (status == 'pending' && !widget.readOnly)
-              PopupMenuButton<String>(
-                color: const Color(0xFF1E1A33),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(12))),
-                onSelected: (val) => _onPaymentProofAction(val, type),
-                itemBuilder: (_) => [
-                  PopupMenuItem(value: 'approved', child: Row(children: [
-                    Icon(Icons.verified_rounded, color: kGreen, size: s.d(16)),
-                    SizedBox(width: s.s(8)),
-                    Text('Approve', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kGreen)),
-                  ])),
-                  PopupMenuItem(value: 'rejected', child: Row(children: [
-                    Icon(Icons.cancel_rounded, color: kRose, size: s.d(16)),
-                    SizedBox(width: s.s(8)),
-                    Text('Reject', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kRose)),
-                  ])),
-                  PopupMenuItem(value: 'clear', child: Row(children: [
-                    Icon(Icons.delete_outline_rounded, color: Colors.white54, size: s.d(16)),
-                    SizedBox(width: s.s(8)),
-                    Text('Clear', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: Colors.white54)),
-                  ])),
-                ],
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.more_horiz_rounded, size: s.d(18), color: Colors.white.withOpacity(0.5)),
-                ]),
-              ),
-          ]),
-          SizedBox(height: s.s(12)),
-          // Screenshot thumbnail — tappable to full screen
-          GestureDetector(
-            onTap: () => _openFullImage(url!),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(s.s(10)),
-              child: Image.network(
-                url!,
-                height: s.d(180),
-                width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => Container(
-                  height: s.d(100),
-                  color: Colors.white.withOpacity(0.05),
-                  child: Center(child: Icon(Icons.broken_image_rounded, color: Colors.white30, size: s.d(32))),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return _certField(
+      label: 'Payment Receipt',
+      url: url,
+      cnicOrId: _user.cnic ?? _user.id,
+      photoType: 'payment_proof',
+      onChanged: (newUrl) async {
+        if (newUrl == null) return;
+        await SupabaseService.instance.client.from('proposals').update({
+          'payment_proof_url': newUrl,
+          'payment_proof_status': 'pending',
+          'payment_proof_plan': 'Rishta Profile',
+          'payment_proof_type': 'new',
+        }).eq('id', _user.id);
+        setState(() {
+          _user = _user.copyWith(
+            paymentProofUrl: newUrl,
+            paymentProofStatus: 'pending',
+            paymentProofPlan: 'Rishta Profile',
+            paymentProofType: 'new',
+          );
+          _baseline = _user;
+        });
+      },
     );
   }
 
@@ -2283,6 +2488,10 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
         ),
       ),
     );
+  }
+
+  Widget _readOnlyField(String label, String value) {
+    return _viewValue(label, value);
   }
 
   Widget _field(String label, TextEditingController ctrl, {TextInputType? type, List<TextInputFormatter>? formatters, Widget? suffix}) {

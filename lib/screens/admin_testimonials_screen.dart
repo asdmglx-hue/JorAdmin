@@ -7,6 +7,7 @@ import '../utils/realtime_refresh.dart';
 import '../models/admin_permissions.dart';
 import 'admin_blog_screen.dart';
 import 'admin_ads_screen.dart';
+import 'admin_form_editor_screen.dart';
 
 SupabaseClient get _db => SupabaseService.instance.client;
 
@@ -1491,4 +1492,51 @@ class _MessageTemplatesCardState extends State<MessageTemplatesCard> {
       contentPadding: const EdgeInsets.all(12),
     ),
   );
+}
+
+// ── Form Editor Card (in Content tab) ────────────────────────────────────────
+
+class _FormEditorCard extends StatelessWidget {
+  const _FormEditorCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16132A),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: kPurple.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(Icons.dynamic_form_rounded, color: kPurple, size: 20),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Proposal Form Fields', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
+            SizedBox(height: 3),
+            Text('Edit dropdowns, ranges, labels, remove or restore fields',
+                style: TextStyle(color: Colors.white54, fontSize: 12)),
+          ]),
+        ),
+        const SizedBox(width: 12),
+        GestureDetector(
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminFormEditorScreen())),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(color: kPurple, borderRadius: BorderRadius.circular(10)),
+            child: const Text('Open', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
+          ),
+        ),
+      ]),
+    );
+  }
 }

@@ -13,6 +13,29 @@ import 'admin_edit_user_screen.dart';
 import 'admin_trash_screen.dart';
 import 'admin_edit_requests_screen.dart';
 
+// Same logic as _missingVerificationDocs in admin_proposals_screen.dart
+List<String> _inactiveMissingDocs(AdminUser user, Map<String, String> settings) {
+  final missing = <String>[];
+  final cnicShown         = settings['verify_now_candidate_cnic'] != 'false';
+  final cnicCompulsory    = settings['verify_now_candidate_cnic_compulsory'] != 'false';
+  final degreeShown       = settings['verify_now_latest_degree'] != 'false';
+  final degreeCompulsory  = settings['verify_now_latest_degree_compulsory'] == 'true';
+  final parentsShown      = settings['verify_now_parents_cnic'] != 'false';
+  final parentsCompulsory = settings['verify_now_parents_cnic_compulsory'] != 'false';
+  if (cnicShown && cnicCompulsory) {
+    if (user.cnicFront == null || user.cnicFront!.isEmpty) missing.add('CNIC Front');
+    if (user.cnicBack  == null || user.cnicBack!.isEmpty)  missing.add('CNIC Back');
+  }
+  if (degreeShown && degreeCompulsory) {
+    if (user.educationDocument == null || user.educationDocument!.isEmpty) missing.add('Education Document');
+  }
+  if (parentsShown && parentsCompulsory) {
+    if (user.guardianCnicFront == null || user.guardianCnicFront!.isEmpty) missing.add('Parent / Guardian CNIC Front');
+    if (user.guardianCnicBack  == null || user.guardianCnicBack!.isEmpty)  missing.add('Parent / Guardian CNIC Back');
+  }
+  return missing;
+}
+
 // Shared by both the "Featured" filter chip (_AdminUsersScreenState) and
 // the "Featured" badge label on each card (_UserCard) — was previously
 // duplicated as a private method on _UserCard only, which meant the filter
@@ -128,17 +151,21 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
   }
 
   List<AdminUser> get _filtered {
-    var list = widget.svc.users.where((u) => u.status != ProposalStatus.deleted && u.status != ProposalStatus.pending).toList();
-    // 'Inactive' matches the same definition used for the badge label
-    // elsewhere on this screen (see _getBadgeLabel): expired counts as
-    // inactive too. Checking only SubscriptionStatus.inactive matched
-    // almost nothing, since real expired subscriptions parse to
-    // SubscriptionStatus.expired — .inactive is only ever the fallback
-    // for missing/unparseable data, not what real expired users have.
-    // Inactive chip: users with doc_pending subscription (approved but compulsory docs missing)
+    var list = widget.svc.users.where((u) =>
+        u.status != ProposalStatus.deleted &&
+        u.status != ProposalStatus.pending &&
+        u.adminNotes != 'AI_IMPORTED' &&
+        u.submissionSource != 'ai_batch' &&
+        !u.isOrderArchived &&
+        // Orders "view only" tab profiles (docPending) must never appear here
+        u.subscriptionStatus != SubscriptionStatus.docPending).toList();
+    // 'DocPending' (internal): users with doc_pending subscription
+    // (approved but compulsory docs missing). Previously labelled 'Inactive'.
     // Red-dot users (have submitted a compulsory doc pending review) sort to top
-    if (_filter == 'Inactive') {
-      list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.docPending).toList();
+    if (_filter == 'DocPending') {
+      list = list.where((u) =>
+          u.subscriptionStatus == SubscriptionStatus.docPending &&
+          !u.isOrderArchived).toList();
       list.sort((a, b) {
         final aDot = _hasCompulsoryDocPending(a) ? 0 : 1;
         final bDot = _hasCompulsoryDocPending(b) ? 0 : 1;
@@ -151,7 +178,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
          u.subscriptionStatus == SubscriptionStatus.inactive) &&
         (u.adminNotes == 'AI_IMPORTED' || u.submissionSource == 'ai_batch')).toList();
     if (_filter == 'Active') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.active).toList();
-    if (_filter == 'Expired') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.expired).toList();
+    if (_filter == 'Inactive') list = list.where((u) => u.subscriptionStatus == SubscriptionStatus.expired).toList();
     if (_filter == 'Paused') list = list.where((u) => u.status == ProposalStatus.paused).toList();
     // 'Featured' means "currently has a live featured boost" (the actual
     // feature admins use from the Users screen), not subscriptionTier ==
@@ -190,11 +217,24 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     }
     if (_search.isNotEmpty) {
       final numSearch = _search.startsWith('#') ? int.tryParse(_search.substring(1)) : int.tryParse(_search);
+      final digitsOnly = _search.replaceAll(RegExp(r'\D'), '');
+      bool phoneMatch(String? phone) {
+        if (phone == null || phone.isEmpty) return false;
+        final phoneDigits = phone.replaceAll(RegExp(r'\D'), '');
+        if (digitsOnly.isNotEmpty && phoneDigits.contains(digitsOnly)) return true;
+        // Local format (0300...) → international (92300...)
+        if (digitsOnly.startsWith('0')) {
+          final intl = '92${digitsOnly.substring(1)}';
+          if (phoneDigits.contains(intl)) return true;
+        }
+        return phone.contains(_search);
+      }
       list = list.where((u) =>
         u.name.toLowerCase().contains(_search.toLowerCase()) ||
         u.city.toLowerCase().contains(_search.toLowerCase()) ||
-        u.contactPhone.contains(_search) ||
+        phoneMatch(u.contactPhone) ||
         (u.cnic != null && u.cnic!.contains(_search)) ||
+        phoneMatch(u.authPhone) ||
         (numSearch != null && u.proposalNumber == numSearch)
       ).toList();
     }
@@ -216,7 +256,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
           child: ListView.builder(
             padding: EdgeInsets.fromLTRB(s.s(16), s.s(8), s.s(16), s.s(20)),
             itemCount: _filtered.length,
-            itemBuilder: (_, i) => _UserCard(
+            itemBuilder: (_, i) => UserCard(
               user: _filtered[i],
               svc: widget.svc,
               featuredCreditPrice: _featuredCreditPrice,
@@ -387,7 +427,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                 onChanged: (v) => setState(() => _search = v),
                 style: TextStyle(color: Colors.white, fontSize: s.f(14)),
                 decoration: InputDecoration(
-                  hintText: 'Search by name, city, phone, cnic, #number...',
+                  hintText: 'Search by name, city, phone or #number...',
                   hintStyle: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: s.f(13)),
                   prefixIcon: Icon(Icons.search_rounded, color: Colors.white.withOpacity(0.3), size: s.d(20)),
                   prefixIconConstraints: BoxConstraints(minWidth: s.d(44), minHeight: s.d(44)),
@@ -417,7 +457,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 
   Widget _buildFilterRow() {
     final s = _S.of(context);
-    final filters = ['All', 'Active', 'Inactive', 'Verified', 'Featured', 'Inactive (AI)', 'Paused', 'Expired', 'Refunded', 'Online', 'Renew'];
+    final filters = ['All', 'Active', 'Inactive', 'Renew', 'Featured', 'Online', 'Verified', 'Paused', 'Refunded'];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -430,12 +470,9 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
         itemBuilder: (_, i) {
           final f = filters[i];
           final sel = _filter == f;
-          // Badge counts for Verified, Inactive, Pay Now and Renew chips
+          // Badge counts for Verified and Renew chips
           final verifiedCount = f == 'Verified'
               ? widget.svc.users.where((u) => _hasNonCompulsoryPending(u)).length
-              : 0;
-          final pendingCount = f == 'Inactive'
-              ? widget.svc.users.where((u) => _hasCompulsoryDocPending(u)).length
               : 0;
           final renewCount = f == 'Renew'
               ? widget.svc.users.where((u) =>
@@ -443,14 +480,9 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                   u.paymentProofStatus == 'pending' && u.paymentProofType == 'renewal').length
               : 0;
           final showBadge = (f == 'Verified' && verifiedCount > 0) ||
-              (f == 'Inactive' && pendingCount > 0) ||
               (f == 'Renew' && renewCount > 0);
-          final badgeCount = f == 'Verified' ? verifiedCount
-              : f == 'Renew' ? renewCount
-              : pendingCount;
-          final badgeColor = f == 'Inactive' ? const Color(0xFF6B7280)
-              : f == 'Renew' ? Colors.orange
-              : kGreen;
+          final badgeCount = f == 'Verified' ? verifiedCount : renewCount;
+          final badgeColor = f == 'Renew' ? Colors.orange : kGreen;
           return GestureDetector(
             onTap: () => setState(() { _filter = f; if (f != 'AI') _aiSort = 'All'; }),
             child: AnimatedContainer(
@@ -572,17 +604,17 @@ bool _isVerifiedChipUser(AdminUser u) {
   return _hasNonCompulsoryPending(u);
 }
 
-class _UserCard extends StatefulWidget {
+class UserCard extends StatefulWidget {
   final AdminUser user;
   final AdminService svc;
   final VoidCallback onEdit;
   final VoidCallback onView;
   final int featuredCreditPrice;
-  const _UserCard({required this.user, required this.svc, required this.onEdit, required this.onView, this.featuredCreditPrice = 200});
-  @override State<_UserCard> createState() => _UserCardState();
+  const UserCard({required this.user, required this.svc, required this.onEdit, required this.onView, this.featuredCreditPrice = 200});
+  @override State<UserCard> createState() => _UserCardState();
 }
 
-class _UserCardState extends State<_UserCard> {
+class _UserCardState extends State<UserCard> {
   late bool _allowed;
 
   @override
@@ -592,7 +624,7 @@ class _UserCardState extends State<_UserCard> {
   }
 
   @override
-  void didUpdateWidget(_UserCard old) {
+  void didUpdateWidget(UserCard old) {
     super.didUpdateWidget(old);
     if (old.user.registrationAllowed != widget.user.registrationAllowed) {
       _allowed = widget.user.registrationAllowed;
@@ -608,7 +640,7 @@ class _UserCardState extends State<_UserCard> {
     final onView = widget.onView;
     final featuredCreditPrice = widget.featuredCreditPrice;
     return GestureDetector(
-      onLongPress: user.adminNotes == 'AI_IMPORTED' ? () => _showAiApprovalMenu(context) : null,
+      onLongPress: null,
       child: Container(
       margin: EdgeInsets.only(bottom: s.s(10)),
       decoration: BoxDecoration(
@@ -735,7 +767,8 @@ class _UserCardState extends State<_UserCard> {
                           decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(8))),
                           child: Icon(Icons.remove_red_eye_outlined, size: s.d(16), color: Colors.white.withOpacity(0.5)),
                         ),
-                        if (_hasNonCompulsoryPending(user) || _hasCompulsoryDocPending(user))
+                        if (_hasNonCompulsoryPending(user) || _hasCompulsoryDocPending(user) ||
+                            ((user.paymentProofUrl?.isNotEmpty ?? false) && user.paymentProofStatus == 'pending'))
                           Positioned(
                             top: -2, right: -2,
                             child: Container(
@@ -790,6 +823,7 @@ class _UserCardState extends State<_UserCard> {
                   label: 'Spent',
                   value: 'Rs.${user.totalSpending.toInt()}',
                   color: kGreen,
+                  onTap: () => _showAdjustSpendDialog(context),
                 ),
               ],
             ),
@@ -797,7 +831,116 @@ class _UserCardState extends State<_UserCard> {
           // Action buttons
           Padding(
             padding: EdgeInsets.fromLTRB(_S.of(context).s(14), _S.of(context).s(10), _S.of(context).s(14), _S.of(context).s(14)),
-            child: Row(
+            child: Builder(builder: (context) {
+              final isInactive = user.subscriptionStatus == SubscriptionStatus.docPending ||
+                  user.subscriptionStatus == SubscriptionStatus.inactive;
+              // ── Inactive: exact same buttons as Orders pending card ────────
+              if (isInactive && AdminPerms.i.canEdit(AdminPageKeys.users)) {
+                return Row(children: [
+                  // Activate — only allowed if compulsory docs AND payment proof are approved
+                  Expanded(child: _ActionBtn(
+                    icon: Icons.check_circle_rounded, label: 'Activate', color: kGreen,
+                    onTap: () async {
+                      HapticFeedback.mediumImpact();
+                      // AI profiles: skip docs/payment check, go straight to approve dialog
+                      if (user.adminNotes == 'AI_IMPORTED' || user.submissionSource == 'ai_batch') {
+                        _showApproveAiDialog(context);
+                        return;
+                      }
+                      final settings = await SupabaseService.instance.fetchAppSettings();
+                      final missingDocs = _inactiveMissingDocs(user, settings);
+                      final proofApproved = (user.paymentProofStatus ?? '') == 'approved';
+                      // Check blockers
+                      final List<String> blockers = [];
+                      if (missingDocs.isNotEmpty) blockers.add('Missing docs: ${missingDocs.join(', ')}');
+                      if (!proofApproved) blockers.add('Payment proof not approved');
+                      if (blockers.isNotEmpty) {
+                        showDialog(
+                          context: context,
+                          builder: (_) => AlertDialog(
+                            backgroundColor: const Color(0xFF16132A),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_S.of(context).s(20))),
+                            title: Row(children: [
+                              Icon(Icons.block_rounded, color: kRose, size: _S.of(context).d(20)),
+                              SizedBox(width: _S.of(context).s(8)),
+                              const Text('Cannot Activate', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                            ]),
+                            content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+                              children: blockers.map((b) => Padding(
+                                padding: EdgeInsets.only(bottom: _S.of(context).s(6)),
+                                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  Icon(Icons.close_rounded, color: kRose, size: _S.of(context).d(14)),
+                                  SizedBox(width: _S.of(context).s(6)),
+                                  Expanded(child: Text(b, style: TextStyle(color: Colors.white70, fontSize: _S.of(context).f(13), height: 1.5))),
+                                ]),
+                              )).toList(),
+                            ),
+                            actions: [
+                              GestureDetector(
+                                onTap: () => Navigator.pop(context),
+                                child: Container(
+                                  padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(16), vertical: _S.of(context).s(10)),
+                                  decoration: BoxDecoration(color: kPurple, borderRadius: BorderRadius.circular(_S.of(context).s(10))),
+                                  child: const Text('OK', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                        return;
+                      }
+                      // All clear — confirm and activate
+                      showDialog(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          backgroundColor: const Color(0xFF16132A),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_S.of(context).s(20))),
+                          title: const Text('Activate Profile?', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                          content: Text(
+                            'All compulsory documents and payment proof are approved. This will fully activate ${user.name}\'s profile and unlock contacts.',
+                            style: TextStyle(color: Colors.white70, fontSize: _S.of(context).f(13.5), height: 1.55),
+                          ),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(context),
+                                child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5)))),
+                            GestureDetector(
+                              onTap: () async {
+                                Navigator.pop(context);
+                                await SupabaseService.instance.client.from('proposals').update({
+                                  'subscription_status': 'active',
+                                }).eq('id', user.id);
+                                // Fire same profile_approved push as approveProposal()
+                                SupabaseService.instance.notifyProfileApproved(user.id);
+                                svc.notifyListeners();
+                              },
+                              child: Container(
+                                padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(16), vertical: _S.of(context).s(10)),
+                                decoration: BoxDecoration(color: kGreen, borderRadius: BorderRadius.circular(_S.of(context).s(10))),
+                                child: const Text('Activate', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  )),
+                  SizedBox(width: _S.of(context).s(8)),
+                  // Edit
+                  Expanded(child: _ActionBtn(
+                    icon: Icons.edit_rounded, label: 'Edit', color: kPurple,
+                    onTap: onEdit,
+                  )),
+                  SizedBox(width: _S.of(context).s(8)),
+                  // Archive
+                  Expanded(child: _ActionBtn(
+                    icon: Icons.archive_rounded, label: 'Archive', color: kAmber,
+                    onTap: () => _showInactiveLongPressMenu(context),
+                    customIcon: CustomPaint(size: Size(_S.of(context).d(14), _S.of(context).d(14)), painter: _ArchiveIconPainter(kAmber)),
+                  )),
+                ]);
+              }
+              // ── Normal buttons ─────────────────────────────────────────────
+              return Row(
               children: [
                 _ActionBtn(
                   icon: AdminPerms.i.canEdit(AdminPageKeys.users) ? Icons.edit_rounded : Icons.visibility_rounded,
@@ -918,8 +1061,8 @@ class _UserCardState extends State<_UserCard> {
                   const SizedBox(width: 8),
                   _ActionBtn(icon: Icons.delete_outline_rounded, label: 'Trash', color: kRose, onTap: () => _confirmDelete(context)),
                 ],
-              ],
-            ),
+              ]);
+            }), // end Builder
           ),
         ],
       ),
@@ -1092,8 +1235,182 @@ class _UserCardState extends State<_UserCard> {
     );
   }
 
+  // Tapping the "Spent" chip opens this — admin enters a +/- amount that's
+  // added to (or subtracted from) the user's cumulative spend. Applied
+  // instantly: both all-time and monthly revenue on the dashboard update
+  // right away, with no separate approval step.
+  void _showAdjustSpendDialog(BuildContext context) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'adjusting spend')) return;
+    final amountCtrl = TextEditingController();
+    bool saving = false;
+    String? error;
+    final currentSpend = widget.user.totalSpending;
+
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (dlgCtx, setDlg) {
+          final delta = double.tryParse(amountCtrl.text.trim());
+          final preview = delta != null ? (currentSpend + delta).clamp(0, double.infinity) : null;
+          return AlertDialog(
+            backgroundColor: const Color(0xFF16132A),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(children: [
+              const Icon(Icons.payments_rounded, color: kGreen, size: 20),
+              const SizedBox(width: 8),
+              const Text('Adjust Spend', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+            ]),
+            content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Current: Rs.${currentSpend.toInt()}',
+                  style: TextStyle(fontSize: 12.5, color: Colors.white.withOpacity(0.5))),
+              const SizedBox(height: 4),
+              Text(
+                'Enter a positive amount to add, or a negative amount to subtract. Updates all-time & monthly revenue immediately.',
+                style: TextStyle(fontSize: 11.5, color: Colors.white.withOpacity(0.4)),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: amountCtrl,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(signed: true),
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^-?\d*$'))],
+                onChanged: (_) => setDlg(() {}),
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+                decoration: InputDecoration(
+                  hintText: 'e.g. 500 or -300',
+                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.2)),
+                  prefixText: 'Rs.',
+                  prefixStyle: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 13),
+                  filled: true,
+                  fillColor: Colors.black.withOpacity(0.25),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+                  focusedBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8)), borderSide: BorderSide(color: kGreen)),
+                ),
+              ),
+              if (preview != null) ...[
+                const SizedBox(height: 8),
+                Text('New total: Rs.${preview.toInt()}',
+                    style: const TextStyle(fontSize: 12.5, color: kGreen, fontWeight: FontWeight.w700)),
+              ],
+              if (error != null) ...[
+                const SizedBox(height: 8),
+                Text(error!, style: const TextStyle(fontSize: 12, color: kRose)),
+              ],
+            ]),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dlgCtx),
+                child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.4))),
+              ),
+              Builder(builder: (context) {
+                final enabled = delta != null && delta != 0 && !saving;
+                return GestureDetector(
+                  onTap: !enabled ? null : () async {
+                    setDlg(() { saving = true; error = null; });
+                    try {
+                      await widget.svc.adjustUserSpending(widget.user.id, delta!);
+                      if (dlgCtx.mounted) Navigator.pop(dlgCtx);
+                    } catch (e) {
+                      setDlg(() { saving = false; error = 'Failed to save'; });
+                    }
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(color: enabled ? kGreen : kGreen.withOpacity(0.35), borderRadius: BorderRadius.circular(8)),
+                    child: saving
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : Text('Save', style: TextStyle(color: Colors.white.withOpacity(enabled ? 1 : 0.6), fontWeight: FontWeight.w700, fontSize: 13)),
+                  ),
+                );
+              }),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   // Long-press entry point on AI-imported cards only — offers to approve
   // (which opens the full form below) or explicitly leave it unapproved.
+  // ── Inactive profile: long press → same archive dialog as Orders tab ──────
+  void _showInactiveLongPressMenu(BuildContext context) {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'managing profiles')) return;
+    HapticFeedback.mediumImpact();
+    final user = widget.user;
+    final svc  = widget.svc;
+    final s    = _S.of(context);
+    showDialog<bool>(
+      context: context,
+      builder: (_) => Dialog(
+        backgroundColor: const Color(0xFF1E1A33),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(20))),
+        child: Padding(
+          padding: EdgeInsets.all(s.s(24)),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: s.d(56), height: s.d(56),
+              decoration: BoxDecoration(color: kAmber.withOpacity(0.15), borderRadius: BorderRadius.circular(s.s(16))),
+              child: Center(child: CustomPaint(size: Size(s.d(26), s.d(26)), painter: _ArchiveIconPainter(kAmber))),
+            ),
+            SizedBox(height: s.s(16)),
+            Text('Archive Order?',
+                style: TextStyle(fontSize: s.f(17), fontWeight: FontWeight.w800, color: Colors.white)),
+            SizedBox(height: s.s(8)),
+            Text(
+              'Order will move to Archived tab. It returns to Pending automatically if the user submits new documents or payment.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: s.f(13), color: Colors.white60, height: 1.5),
+            ),
+            SizedBox(height: s.s(24)),
+            Row(children: [
+              Expanded(child: GestureDetector(
+                onTap: () => Navigator.pop(context, false),
+                child: Container(
+                  padding: EdgeInsets.symmetric(vertical: s.s(13)),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.07), borderRadius: BorderRadius.circular(s.s(12))),
+                  child: Text('Cancel', textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: s.f(14), fontWeight: FontWeight.w700, color: Colors.white60)),
+                ),
+              )),
+              SizedBox(width: s.s(12)),
+              Expanded(child: GestureDetector(
+                onTap: () => Navigator.pop(context, true),
+                child: Container(
+                  padding: EdgeInsets.symmetric(vertical: s.s(13)),
+                  decoration: BoxDecoration(color: kPurple, borderRadius: BorderRadius.circular(s.s(12))),
+                  child: Text('Archive', textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: s.f(14), fontWeight: FontWeight.w700, color: Colors.white)),
+                ),
+              )),
+            ]),
+          ]),
+        ),
+      ),
+    ).then((confirmed) async {
+      if (confirmed != true) return;
+      await svc.setOrderArchived(user.id, true);
+      // Also hide from public — archived profiles should not be visible
+      await SupabaseService.instance.client.from('proposals').update({
+        'status': 'pending',
+        'subscription_status': 'inactive',
+      }).eq('id', user.id);
+      svc.notifyListeners();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Order archived'),
+          backgroundColor: kPurple,
+          duration: Duration(seconds: 2),
+        ));
+      }
+    });
+  }
+
+  // ── Verify Now dialog (same as orders screen doc verification) ────────────
+  // ── Pay Now dialog (prompt to open profile and check payment proof) ───────
+  // (Both replaced by inline logic in the action buttons Builder above)
+
   void _showAiApprovalMenu(BuildContext context) {
     if (!AdminPerms.i.guardEdit(AdminPageKeys.users, what: 'approving profiles')) return;
     HapticFeedback.mediumImpact();
@@ -1127,12 +1444,12 @@ class _UserCardState extends State<_UserCard> {
   // exactly like an ordinary profile, with the persistent "Approved" tag
   // now showing next to its status.
   void _showApproveAiDialog(BuildContext context) {
-    final cnicCtrl = TextEditingController();
     final passwordCtrl = TextEditingController();
-    final daysCtrl = TextEditingController();
-    final spentCtrl = TextEditingController();
-    bool saving = false;
-    bool generatingCnic = false;
+    final daysCtrl    = TextEditingController();
+    final spentCtrl   = TextEditingController();
+    bool saving          = false;
+    bool generatingPhone = false;
+    String? generatedPhone;
     String? error;
 
     InputDecoration deco(String hint, {String? suffix}) => InputDecoration(
@@ -1148,166 +1465,170 @@ class _UserCardState extends State<_UserCard> {
       focusedBorder: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8)), borderSide: BorderSide(color: kPurple)),
     );
 
-    Widget genButton(bool loading, VoidCallback onTap) => GestureDetector(
-      onTap: loading ? null : onTap,
-      child: Container(
-        padding: const EdgeInsets.all(11),
-        decoration: BoxDecoration(color: kPurple.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
-        child: loading
-            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: kPurple, strokeWidth: 2))
-            : Icon(Icons.auto_fix_high_rounded, color: kPurple, size: 18),
-      ),
-    );
-
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (dlgCtx, setDlg) => AlertDialog(
-          backgroundColor: const Color(0xFF16132A),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(children: [
-            Icon(Icons.done, color: kGreen, size: 20),
-            const SizedBox(width: 8),
-            const Text('Approve Profile', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
-          ]),
-          content: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('CNIC, password, and expiry are all required before this profile can be approved.',
-                style: TextStyle(fontSize: 12.5, color: Colors.white.withOpacity(0.5))),
-              const SizedBox(height: 14),
-              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                Expanded(child: TextField(
-                  controller: cnicCtrl,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d-]')), _AiCnicFormatter()],
-                  onChanged: (_) => setDlg(() {}),
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  decoration: deco('CNIC'),
-                )),
-                const SizedBox(width: 8),
-                genButton(generatingCnic, () async {
-                  setDlg(() => generatingCnic = true);
-                  try {
-                    final cnic = await SupabaseService.instance.generateNextAiCnic();
-                    cnicCtrl.text = cnic;
-                  } catch (_) {}
-                  setDlg(() => generatingCnic = false);
-                }),
-              ]),
-              const SizedBox(height: 10),
-              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                Expanded(child: TextField(
-                  controller: passwordCtrl,
-                  onChanged: (_) => setDlg(() {}),
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  decoration: deco('Password'),
-                )),
-                const SizedBox(width: 8),
-                genButton(false, () {
-                  passwordCtrl.text = _generateAiPassword();
-                  setDlg(() {});
-                }),
-              ]),
-              const SizedBox(height: 10),
-              TextField(
-                controller: daysCtrl,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                onChanged: (_) => setDlg(() {}),
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: deco('Expiry', suffix: 'days'),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: spentCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.]'))],
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: deco('Rs. Spent (optional)'),
-              ),
-              if (error != null) ...[
-                const SizedBox(height: 8),
-                Text(error!, style: const TextStyle(fontSize: 12, color: kRose)),
-              ],
+        builder: (dlgCtx, setDlg) {
+          final days       = int.tryParse(daysCtrl.text.trim());
+          final daysValid  = days != null && days > 0;
+          final passValid  = passwordCtrl.text.trim().isNotEmpty;
+          final phoneReady = generatedPhone != null;
+          final enabled    = daysValid && passValid && phoneReady && !saving;
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF16132A),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(children: [
+              const Icon(Icons.done, color: kGreen, size: 20),
+              const SizedBox(width: 8),
+              const Text('Approve AI Profile', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
             ]),
-          ),
-          actionsAlignment: MainAxisAlignment.spaceBetween,
-          actions: [
-            Builder(builder: (context) {
-              final copyEnabled = cnicCtrl.text.replaceAll('-', '').length == 13 && passwordCtrl.text.trim().isNotEmpty;
-              return GestureDetector(
-                onTap: !copyEnabled ? null : () {
-                  final message = '''
-*Your Login Details*
+            content: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  'Generate a phone series identity, set a password and expiry days to approve.',
+                  style: TextStyle(fontSize: 12.5, color: Colors.white.withOpacity(0.5)),
+                ),
+                const SizedBox(height: 14),
 
-*CNIC:* ${cnicCtrl.text.trim()}
-*Password:* ${passwordCtrl.text.trim()}
-
-Login here:
-👉 joronline.com/login
-
-Or download the mobile app:
-👉 joronline.com/get-android
-
-Thanks for joining Jor! We wish you the best in finding the right match.'''.trim();
-                  Clipboard.setData(ClipboardData(text: message));
-                  HapticFeedback.lightImpact();
-                },
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.copy_rounded, size: 14, color: copyEnabled ? kPurple : Colors.white.withOpacity(0.2)),
-                  const SizedBox(width: 5),
-                  Text('Copy', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: copyEnabled ? kPurple : Colors.white.withOpacity(0.2))),
+                // ── Phone Series Identity ───────────────────────────────
+                Text('Phone Identity', style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4))),
+                const SizedBox(height: 6),
+                Row(children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.25),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: phoneReady ? kGreen.withOpacity(0.4) : Colors.white.withOpacity(0.1)),
+                      ),
+                      child: Text(
+                        generatedPhone ?? 'Tap ✦ to generate',
+                        style: TextStyle(
+                          color: phoneReady ? Colors.white : Colors.white.withOpacity(0.25),
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: generatingPhone ? null : () async {
+                      setDlg(() => generatingPhone = true);
+                      try {
+                        final phone = await SupabaseService.instance.generateNextAiPhone();
+                        setDlg(() { generatedPhone = phone; generatingPhone = false; });
+                      } catch (_) {
+                        setDlg(() => generatingPhone = false);
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(11),
+                      decoration: BoxDecoration(color: kGreen.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+                      child: generatingPhone
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: kGreen, strokeWidth: 2))
+                          : const Icon(Icons.auto_fix_high_rounded, color: kGreen, size: 18),
+                    ),
+                  ),
                 ]),
-              );
-            }),
-            Row(mainAxisSize: MainAxisSize.min, children: [
+                const SizedBox(height: 10),
+
+                // ── Password ────────────────────────────────────────────
+                Text('Password', style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4))),
+                const SizedBox(height: 6),
+                Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                  Expanded(child: TextField(
+                    controller: passwordCtrl,
+                    onChanged: (_) => setDlg(() {}),
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    decoration: deco('Password'),
+                  )),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () {
+                      passwordCtrl.text = _generateAiPassword();
+                      setDlg(() {});
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(11),
+                      decoration: BoxDecoration(color: kPurple.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+                      child: const Icon(Icons.auto_fix_high_rounded, color: kPurple, size: 18),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 10),
+
+                // ── Days ────────────────────────────────────────────────
+                Text('Subscription Days', style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4))),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: daysCtrl,
+                  keyboardType: TextInputType.number,
+                  onChanged: (_) => setDlg(() {}),
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: deco('Days (e.g. 90)'),
+                ),
+                const SizedBox(height: 10),
+
+                // ── Amount Spent (optional) ─────────────────────────────
+                Text('Rs. Spent (optional)', style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4))),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: spentCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  onChanged: (_) => setDlg(() {}),
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: deco('Amount', suffix: 'PKR'),
+                ),
+
+                if (error != null) ...[
+                  const SizedBox(height: 10),
+                  Text(error!, style: const TextStyle(color: kRose, fontSize: 12)),
+                ],
+              ]),
+            ),
+            actions: [
               TextButton(
                 onPressed: () => Navigator.pop(dlgCtx),
                 child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.4))),
               ),
-              Builder(builder: (context) {
-              final cnicValid = cnicCtrl.text.replaceAll('-', '').length == 13;
-              final passwordValid = passwordCtrl.text.trim().isNotEmpty;
-              final days = int.tryParse(daysCtrl.text.trim());
-              final daysValid = days != null && days > 0;
-              final enabled = cnicValid && passwordValid && daysValid && !saving;
-              return GestureDetector(
+              GestureDetector(
                 onTap: !enabled ? null : () async {
                   setDlg(() { saving = true; error = null; });
                   try {
                     final spent = double.tryParse(spentCtrl.text.trim());
                     await SupabaseService.instance.approveAiProposalWithDetails(
                       userId: widget.user.id,
-                      cnic: cnicCtrl.text.trim(),
+                      cnic: '',
                       password: passwordCtrl.text.trim(),
                       days: days!,
                       amountPaid: spent,
+                      authPhone: generatedPhone,
                     );
                     if (dlgCtx.mounted) Navigator.pop(dlgCtx);
                   } catch (e) {
-                    setDlg(() { saving = false; error = 'Failed to approve: $e'; });
+                    setDlg(() { saving = false; error = 'Failed: $e'; });
                   }
                 },
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(color: enabled ? kGreen : kGreen.withOpacity(0.3), borderRadius: BorderRadius.circular(8)),
+                  decoration: BoxDecoration(
+                    color: enabled ? kGreen : kGreen.withOpacity(0.3),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                   child: saving
                       ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                      : Text('Approve', style: TextStyle(color: Colors.white.withOpacity(enabled ? 1 : 0.6), fontWeight: FontWeight.w700, fontSize: 13)),
+                      : const Text('Approve', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
                 ),
-              );
-            }),
-            ]),
-          ],
-        ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
-  // Random password for the auto-generate button — 6 characters, lowercase
-  // letters and digits only, and no visually-confusable characters
-  // (0/o, 1/l, i, j) so it is easy to read out on WhatsApp and easy to
-  // type on a phone. Always mixes at least one letter and one digit.
   String _generateAiPassword() {
     const letters = 'abcdefghkmnpqrstuvwxyz';
     const digits = '23456789';
@@ -1451,9 +1772,10 @@ class _ActionBtn extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final bool disabled;
-  const _ActionBtn({required this.icon, required this.label, required this.color, required this.onTap, this.disabled = false});
+  final Widget? customIcon;
+  const _ActionBtn({required this.icon, required this.label, required this.color, required this.onTap, this.disabled = false, this.customIcon});
 
   @override
   Widget build(BuildContext context) {
@@ -1470,7 +1792,9 @@ class _ActionBtn extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: effectiveColor.withOpacity(iconOpacity), size: s.d(14)),
+              customIcon != null
+                  ? Opacity(opacity: iconOpacity, child: customIcon!)
+                  : Icon(icon, color: effectiveColor.withOpacity(iconOpacity), size: s.d(14)),
               SizedBox(width: s.s(4)),
               Text(label, style: TextStyle(fontSize: s.f(12), fontWeight: FontWeight.w700, color: effectiveColor.withOpacity(iconOpacity))),
             ],
@@ -1480,6 +1804,7 @@ class _ActionBtn extends StatelessWidget {
     );
   }
 }
+
 
 // ── Featured Manage Sheet ──────────────────────────────────────────────────────
 class _FeaturedManageSheet extends StatefulWidget {
@@ -2767,4 +3092,48 @@ class _LastSeenText extends StatelessWidget {
       ],
     );
   }
+}
+
+// ── Archive icon painter (copied from admin_proposals_screen) ─────────────────
+class _ArchiveIconPainter extends CustomPainter {
+  final Color color;
+  _ArchiveIconPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = color..style = PaintingStyle.fill;
+    final scale = size.width / 16.0;
+    canvas.scale(scale, scale);
+    final path = Path();
+    path.moveTo(13.5, 0); path.lineTo(2.5, 0);
+    path.cubicTo(1.12, 0, 0, 1.12, 0, 2.5); path.lineTo(0, 13.5);
+    path.cubicTo(0, 14.88, 1.12, 16, 2.5, 16); path.lineTo(13.5, 16);
+    path.cubicTo(14.88, 16, 16, 14.88, 16, 13.5); path.lineTo(16, 2.5);
+    path.cubicTo(16, 1.12, 14.88, 0, 13.5, 0); path.close();
+    path.moveTo(2.5, 1); path.lineTo(13.5, 1);
+    path.cubicTo(14.33, 1, 15, 1.67, 15, 2.5); path.lineTo(15, 3);
+    path.lineTo(11.5, 3); path.cubicTo(10.67, 3, 10, 3.67, 10, 4.5);
+    path.cubicTo(10, 4.78, 9.78, 5, 9.5, 5); path.lineTo(6.5, 5);
+    path.cubicTo(6.22, 5, 6, 4.78, 6, 4.5); path.cubicTo(6, 3.67, 5.33, 3, 4.5, 3);
+    path.lineTo(1, 3); path.lineTo(1, 2.5); path.cubicTo(1, 1.67, 1.67, 1, 2.5, 1); path.close();
+    path.moveTo(13.5, 15); path.lineTo(2.5, 15);
+    path.cubicTo(1.67, 15, 1, 14.33, 1, 13.5); path.lineTo(1, 4);
+    path.lineTo(4.5, 4); path.cubicTo(4.78, 4, 5, 4.22, 5, 4.5);
+    path.cubicTo(5, 5.33, 5.67, 6, 6.5, 6); path.lineTo(9.5, 6);
+    path.cubicTo(10.33, 6, 11, 5.33, 11, 4.5); path.cubicTo(11, 4.22, 11.22, 4, 11.5, 4);
+    path.lineTo(15, 4); path.lineTo(15, 13.5); path.cubicTo(15, 14.33, 14.33, 15, 13.5, 15); path.close();
+    path.moveTo(11.35, 9.15); path.cubicTo(11.54, 9.34, 11.54, 9.66, 11.35, 9.85);
+    path.lineTo(8.35, 12.85); path.cubicTo(8.3, 12.9, 8.24, 12.94, 8.19, 12.96);
+    path.cubicTo(8.07, 13.01, 7.93, 13.01, 7.81, 12.96);
+    path.cubicTo(7.76, 12.94, 7.7, 12.9, 7.65, 12.85); path.lineTo(4.65, 9.85);
+    path.cubicTo(4.46, 9.66, 4.46, 9.34, 4.65, 9.15);
+    path.cubicTo(4.84, 8.96, 5.16, 8.96, 5.35, 9.15); path.lineTo(7.5, 11.29);
+    path.lineTo(7.5, 8.5); path.cubicTo(7.5, 8.22, 7.72, 8, 8, 8);
+    path.cubicTo(8.28, 8, 8.5, 8.22, 8.5, 8.5); path.lineTo(8.5, 11.29);
+    path.lineTo(10.65, 9.15); path.cubicTo(10.84, 8.96, 11.16, 8.96, 11.35, 9.15); path.close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_ArchiveIconPainter old) => old.color != color;
 }

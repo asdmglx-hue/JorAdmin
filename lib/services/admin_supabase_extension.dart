@@ -41,7 +41,7 @@ const String _adminUserCols = 'id,proposal_number,name,age,gender,city,country,c
     'sisters,brothers,home_type,house_size,location,disability_details,'
     'has_kids,has_siblings,has_car,car_name,has_other_property,other_property,'
     'has_generator,has_solar,has_servant,looking_for,about,contact_phone,'
-    'contact_phone_2,contact_person,contact_person_2,phone_verified,email_verified,cnic_verified,cnic,'
+    'contact_phone_2,contact_person,contact_person_2,phone_verified,email_verified,cnic_verified,cnic,auth_phone,'
     'password,smokes,drinks,monthly_income,has_disability,physically_active,'
     'posted_at,updated_at,status,subscription_tier,subscription_status,'
     'subscription_start,subscription_expiry,amount_paid,'
@@ -49,9 +49,9 @@ const String _adminUserCols = 'id,proposal_number,name,age,gender,city,country,c
     'deletion_reason,admin_notes,discarded,suggested_info,profile_photo_url,'
     'cnic_front_url,cnic_back_url,guardian_cnic_front_url,guardian_cnic_back_url,'
     'education_document_url,applied_coupon_code,profession_category,registration_allowed,ai_contacted,doc_verification,is_doc_verified,'
-    'submission_source,last_seen_at,last_seen_source,'
+    'submission_source,last_seen_at,last_seen_source,submitter_type,'
     'payment_proof_url,payment_proof_status,payment_proof_plan,payment_proof_type,'
-    'is_order_archived,archived_at';
+    'is_order_archived,archived_at,payment_proof_count,featured_proof_count';
 
 extension AdminSupabaseExtension on SupabaseService {
   Future<List<AdminUser>> fetchAdminUsers() async {
@@ -82,7 +82,85 @@ extension AdminSupabaseExtension on SupabaseService {
     return allUsers;
   }
 
-  // Incremental fetch — only rows updated since [since].
+  // ── Optimized fetches added for boot performance ─────────────────────────
+  // Page size for AI pagination
+  static const int kPageSize = 30;
+
+  // Shared mapper used by optimized fetches
+  AdminUser _rowToUser(dynamic row) {
+    final map = Map<String, dynamic>.from(row as Map);
+    final boostsRaw = map['featured_boosts'];
+    map['featured_boosts'] = boostsRaw is List
+        ? boostsRaw
+        : (boostsRaw != null ? List<dynamic>.from(boostsRaw as Iterable) : []);
+    map['subscriptions'] = [];
+    map['proposal_photos'] = [];
+    return AdminUser.fromJson(map);
+  }
+
+  // Boot fetch: all users, then filter AI out in Dart.
+  // Dart-side filter handles NULL admin_notes correctly
+  // (PostgREST .neq excludes NULLs, which would drop real users like Abdullah).
+  Future<List<AdminUser>> fetchRealAdminUsers() async {
+    // Fetch only non-AI users at DB level — tiny payload (~12 rows vs 4000)
+    // Uses two separate queries because Supabase .neq excludes NULLs,
+    // so we fetch rows where admin_notes IS NULL or not AI_IMPORTED
+    final res = await client
+        .from('admin_proposals_summary')
+        .select()
+        .or('admin_notes.is.null,admin_notes.neq.AI_IMPORTED')
+        .or('submission_source.is.null,submission_source.neq.ai_batch')
+        .order('updated_at', ascending: false);
+    // Safety filter in Dart to catch any edge cases
+    return (res as List)
+        .map(_rowToUser)
+        .where((u) => u.adminNotes != 'AI_IMPORTED' && u.submissionSource != 'ai_batch')
+        .toList();
+  }
+
+  // AI tab search — server-side, searches all profiles not just loaded ones.
+  // Called when admin types in search box on AI tab. Returns up to 50 matches.
+  Future<List<AdminUser>> searchAIUsers(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return [];
+    // Strip non-digits for phone search
+    final digits = q.replaceAll(RegExp(r'\D'), '');
+    // Convert Pakistani trunk 0 → 92 for stored format matching
+    final intlDigits = digits.startsWith('0') && digits.length > 1 ? '92${digits.substring(1)}' : null;
+
+    // Build OR filter: name, contact_phone, auth_phone
+    final filters = <String>[
+      'name.ilike.%$q%',
+      if (digits.isNotEmpty) 'contact_phone.ilike.%$digits%',
+      if (digits.isNotEmpty) 'auth_phone.ilike.%$digits%',
+      if (intlDigits != null) 'contact_phone.ilike.%$intlDigits%',
+      if (intlDigits != null) 'auth_phone.ilike.%$intlDigits%',
+    ];
+
+    final res = await client
+        .from('admin_proposals_summary')
+        .select()
+        .or('admin_notes.eq.AI_IMPORTED,submission_source.eq.ai_batch')
+        .neq('status', 'deleted')
+        .or(filters.join(','))
+        .order('updated_at', ascending: false)
+        .limit(50);
+    return (res as List).map(_rowToUser).toList();
+  }
+
+  // AI tab fetch: paginated 30 at a time, only loaded when admin opens AI tab.
+  Future<List<AdminUser>> fetchAIUsers({int page = 0}) async {
+    final res = await client
+        .from('admin_proposals_summary')
+        .select()
+        .or('admin_notes.eq.AI_IMPORTED,submission_source.eq.ai_batch')
+        .neq('status', 'deleted')
+        .order('updated_at', ascending: false)
+        .range(page * kPageSize, (page + 1) * kPageSize - 1);
+    return (res as List).map(_rowToUser).toList();
+  }
+
+    // Incremental fetch — only rows updated since [since].
   // Returns a small list (typically 0–10 rows) that the caller merges into
   // the existing local list. Same view, same fromJson — just filtered.
   Future<List<AdminUser>> fetchAdminUsersSince(DateTime since) async {
@@ -136,6 +214,16 @@ extension AdminSupabaseExtension on SupabaseService {
     final boosts = await client.from('featured_boosts').select('*').eq('user_id', id);
     final photos = await client.from('proposal_photos').select('*').eq('proposal_id', id);
 
+    // Fetch latest pending featured proof
+    final featuredProof = await client
+        .from('pending_featured_requests')
+        .select('id, proof_url, status')
+        .eq('user_id_fk', id)
+        .not('proof_url', 'is', null)
+        .order('created_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+
     // Also fetch the latest pending verification request — docs submitted via
     // "Verify Now" go into cnic_verification_requests, not into proposals
     // directly. Merge them so the edit/view screen shows them immediately.
@@ -158,19 +246,52 @@ extension AdminSupabaseExtension on SupabaseService {
       merged['education_document_url']  ??= verif['education_document_url'];
     }
 
+    // Fetch password from phone_accounts — proposals table has no password column,
+    // so it must be joined separately here (the summary view already does this).
+    final authPhone = merged['auth_phone'] as String?;
+    if (authPhone != null && authPhone.isNotEmpty) {
+      final pwRow = await client
+          .from('phone_accounts')
+          .select('password')
+          .eq('phone', authPhone)
+          .maybeSingle();
+      // Prefer phone_accounts password, but keep proposals.password as fallback
+      merged['password'] = (pwRow?['password'] as String?) ?? merged['password'];
+    }
+
     return AdminUser.fromJson({
       ...merged,
       'subscriptions': subs,
       'featured_boosts': boosts,
       'proposal_photos': photos,
+      'featured_proof_url': featuredProof?['proof_url'],
+      'featured_proof_status': featuredProof?['status'],
+      'featured_proof_id': featuredProof?['id'],
     });
   }
 
   Future<void> updateUser(AdminUser user) async {
+    // Fetch old auth_phone before updating so we can update phone_accounts correctly
+    final oldData = await client
+        .from('proposals')
+        .select('auth_phone')
+        .eq('id', user.id)
+        .maybeSingle();
+    final oldAuthPhone = oldData?['auth_phone'] as String?;
+
     await client
         .from('proposals')
         .update(user.toUpdateJson())
         .eq('id', user.id);
+
+    // If auth_phone changed, update phone_accounts so login works with new number
+    if (user.authPhone != null && user.authPhone!.isNotEmpty &&
+        oldAuthPhone != null && oldAuthPhone != user.authPhone) {
+      await client
+          .from('phone_accounts')
+          .update({'phone': user.authPhone})
+          .eq('phone', oldAuthPhone);
+    }
     notify();
   }
 
@@ -240,9 +361,10 @@ extension AdminSupabaseExtension on SupabaseService {
   // ══════════════════════════════════════════════════════════════════════════
   //  ADMIN — Admin accounts (Dashboard → Settings → Create Admin)
   //
-  //  CNIC + password logins that unlock full profile viewing when used on
-  //  the regular login screen. See AdminAccount in admin_models.dart for
-  //  the distinction from `admin_users` (Supabase-Auth-linked panel access).
+  //  Phone + password logins stored in admin_accounts.phone. These allow
+  //  an admin to log in to the regular user app with all profiles unlocked.
+  //  Distinct from admin_users (Supabase-Auth-linked panel access).
+  //  NOTE: admin_accounts no longer has a cnic column — login is by phone.
   // ══════════════════════════════════════════════════════════════════════════
   Future<List<AdminAccount>> fetchAdminAccounts() async {
     final res = await client
@@ -257,7 +379,7 @@ extension AdminSupabaseExtension on SupabaseService {
   /// Returns null on success, or a user-facing error message on failure.
   Future<String?> createAdminAccount({
     required String name,
-    required String cnic,
+    required String cnic, // parameter kept as 'cnic' for call-site compat — value is a phone number
     required String password,
     bool isSuper = false,
     Map<String, String> permissions = const {},
@@ -265,8 +387,7 @@ extension AdminSupabaseExtension on SupabaseService {
     try {
       await client.from('admin_accounts').insert({
         'name': name,
-        // CNIC is always stored digits-only so login matching is consistent.
-        'cnic': cnic.replaceAll('-', ''),
+        'phone': cnic.trim(), // stored in phone column
         'password': password,
         'is_super': isSuper,
         'permissions': isSuper ? <String, String>{} : permissions,
@@ -274,7 +395,7 @@ extension AdminSupabaseExtension on SupabaseService {
       notify();
       return null;
     } on PostgrestException catch (e) {
-      if (e.code == '23505') return 'An admin with this CNIC already exists.';
+      if (e.code == '23505') return 'An admin with this phone number already exists.';
       return e.message;
     } catch (e) {
       return e.toString();
@@ -285,7 +406,7 @@ extension AdminSupabaseExtension on SupabaseService {
   Future<String?> updateAdminAccount({
     required String id,
     required String name,
-    required String cnic,
+    required String cnic, // parameter kept as 'cnic' for call-site compat — value is a phone number
     required String password,
     bool isSuper = false,
     Map<String, String> permissions = const {},
@@ -293,7 +414,7 @@ extension AdminSupabaseExtension on SupabaseService {
     try {
       await client.from('admin_accounts').update({
         'name': name,
-        'cnic': cnic.replaceAll('-', ''),
+        'phone': cnic.trim(), // stored in phone column
         'password': password,
         'is_super': isSuper,
         'permissions': isSuper ? <String, String>{} : permissions,
@@ -302,7 +423,7 @@ extension AdminSupabaseExtension on SupabaseService {
       notify();
       return null;
     } on PostgrestException catch (e) {
-      if (e.code == '23505') return 'An admin with this CNIC already exists.';
+      if (e.code == '23505') return 'An admin with this phone number already exists.';
       return e.message;
     } catch (e) {
       return e.toString();

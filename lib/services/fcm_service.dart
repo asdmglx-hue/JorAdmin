@@ -13,6 +13,7 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'notification_service.dart';
 import 'supabase_service.dart';
 
 // Key used to persist the admin's FCM token locally (set when admin logs in).
@@ -54,11 +55,15 @@ class FCMService {
       // Listen for token refresh
       _fcm.onTokenRefresh.listen(_saveToken);
 
-      // Foreground messages — currently just logged. Re-implement display
-      // logic here once the new notification system is built.
-      FirebaseMessaging.onMessage.listen((message) {
-        debugPrint('FCM foreground message received (no handler wired up yet): '
-            '${message.messageId}');
+      // Foreground messages — show tray banner via the already-initialised
+      // NotificationService plugin. Background/terminated ones are shown
+      // automatically by the OS so no code needed for those.
+      FirebaseMessaging.onMessage.listen((message) async {
+        debugPrint('FCM foreground message received: ${message.messageId}');
+        final title = message.notification?.title ?? message.data['title'] as String? ?? '';
+        final body  = message.notification?.body  ?? message.data['body']  as String? ?? '';
+        if (title.isEmpty && body.isEmpty) return;
+        await NotificationService.instance.showTrayOnly(title, body);
       });
     } catch (e) {
       debugPrint('FCM init error: $e');
@@ -69,14 +74,14 @@ class FCMService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('fcm_token', token);
-      // Sync to DB — use activatedCnic first, fall back to user_cnic from SharedPreferences
-      final cnic = SupabaseService.instance.activatedCnic
-          ?? prefs.getString('user_cnic');
-      if (cnic != null && cnic.isNotEmpty) {
+      // Sync to DB — use activatedPhone (auth_phone) to find the proposal
+      final phone = SupabaseService.instance.activatedPhone
+          ?? prefs.getString('activated_phone');
+      if (phone != null && phone.isNotEmpty) {
         await SupabaseService.instance.client
             .from('proposals')
             .update({'fcm_token': token})
-            .eq('cnic', cnic.trim());
+            .eq('auth_phone', phone.trim());
         debugPrint('FCM token synced to DB');
       }
     } catch (e) {

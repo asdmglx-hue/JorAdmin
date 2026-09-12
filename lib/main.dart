@@ -6,6 +6,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'utils/theme.dart';
 import 'services/fcm_service.dart';
+import 'services/notification_service.dart';
 import 'services/supabase_service.dart';
 import 'models/admin_permissions.dart';
 import 'screens/admin_login_screen.dart';
@@ -54,6 +55,7 @@ void main() async {
   // FCM device registration only (permission + token sync). Push-sending
   // logic and the in-app notification system have been removed and are
   // pending a fresh implementation.
+  if (!kIsWeb) await NotificationService.instance.init();
   if (!kIsWeb) await FCMService.instance.init();
 
   // Fetch DB-driven lists in background — castes, cities, occupations

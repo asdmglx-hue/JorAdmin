@@ -4,7 +4,6 @@ import '../utils/theme.dart';
 import '../services/admin_service.dart';
 import '../models/admin_models.dart';
 import '../models/admin_permissions.dart';
-import 'admin_edit_user_screen.dart'; // formatCnicDisplay
 
 // ── Responsive scale helper ────────────────────────────────────────────────
 class _S {
@@ -20,25 +19,9 @@ class _S {
   }
 }
 
-// ── CNIC auto-formatter (13 digits, dashes at positions 5 and 12) ─────────
-class _CnicFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(TextEditingValue old, TextEditingValue val) {
-    final digits = val.text.replaceAll('-', '');
-    if (digits.length > 13) return old;
-    final buf = StringBuffer();
-    for (int i = 0; i < digits.length; i++) {
-      if (i == 5 || i == 12) buf.write('-');
-      buf.write(digits[i]);
-    }
-    final s = buf.toString();
-    return val.copyWith(text: s, selection: TextSelection.collapsed(offset: s.length));
-  }
-}
-
 // ── AdminAccountsScreen ─────────────────────────────────────────────────────
 // Dashboard → Settings → Create Admin. Lets the main admin create, update,
-// list and remove CNIC + password logins. These are the SAME credentials used
+// list and remove phone + password logins. These are the SAME credentials used
 // to sign in to this Admin Panel, and each account carries a permission map
 // that decides which pages it can open and whether it can edit them.
 class AdminAccountsScreen extends StatefulWidget {
@@ -95,7 +78,7 @@ class _AdminAccountsScreenState extends State<AdminAccountsScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(s.s(16))),
         title: Text('Remove Admin?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: s.f(16))),
         content: Text(
-          '${account.name} (${formatCnicDisplay(account.cnic)}) will no longer be able to log in with unlocked access.',
+          '${account.name} (${account.phone}) will no longer be able to log in with unlocked access.',
           style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: s.f(13)),
         ),
         actions: [
@@ -199,7 +182,7 @@ class _AdminAccountsScreenState extends State<AdminAccountsScreen> {
           Text('No admin accounts yet', style: TextStyle(color: Colors.white.withOpacity(0.6), fontWeight: FontWeight.w700, fontSize: s.f(15))),
           SizedBox(height: s.s(6)),
           Text(
-            'Create one to let a CNIC + password log in with every profile unlocked.',
+            'Create one to let a phone number + password log in with every profile unlocked.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: s.f(12.5)),
           ),
@@ -248,7 +231,7 @@ class _AdminAccountCard extends StatelessWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(account.name, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: s.f(14))),
             SizedBox(height: s.s(2)),
-            Text(formatCnicDisplay(account.cnic), style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: s.f(12), letterSpacing: 0.3)),
+            Text(account.phone, style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: s.f(12), letterSpacing: 0.3)),
             SizedBox(height: s.s(6)),
             _accessSummary(s, account),
           ]),
@@ -334,9 +317,9 @@ class _AdminAccountFormDialogState extends State<_AdminAccountFormDialog> {
   void initState() {
     super.initState();
     _nameCtrl = TextEditingController(text: widget.existing?.name ?? '');
-    _cnicCtrl = TextEditingController(text: formatCnicDisplay(widget.existing?.cnic ?? ''));
+    _cnicCtrl = TextEditingController(text: widget.existing?.phone ?? '');
     _passCtrl = TextEditingController(text: widget.existing?.password ?? '');
-    _cnicDigits = (widget.existing?.cnic ?? '').replaceAll('-', '').length;
+    _cnicDigits = (widget.existing?.phone ?? '').length;
     _fullAccess = widget.existing?.isSuper ?? false;
     _perms.addAll(widget.existing?.permissions ?? const <String, String>{});
     // A brand-new admin starts with the list open so permissions aren't missed.
@@ -390,16 +373,16 @@ class _AdminAccountFormDialogState extends State<_AdminAccountFormDialog> {
   }
 
   Future<void> _submit() async {
-    final name = _nameCtrl.text.trim();
-    final cnic = _cnicCtrl.text.trim();
-    final pass = _passCtrl.text.trim();
+    final name  = _nameCtrl.text.trim();
+    final phone = _cnicCtrl.text.trim();
+    final pass  = _passCtrl.text.trim();
 
     if (name.isEmpty) {
       setState(() => _error = 'Enter a name');
       return;
     }
-    if (cnic.replaceAll('-', '').length != 13) {
-      setState(() => _error = 'Enter complete CNIC (13 digits)');
+    if (phone.length != 11) {
+      setState(() => _error = 'Phone number must be exactly 11 digits (e.g. 03011234567)');
       return;
     }
     if (pass.length < 6) {
@@ -420,10 +403,10 @@ class _AdminAccountFormDialogState extends State<_AdminAccountFormDialog> {
 
     final err = _isEdit
         ? await widget.svc.updateAdminAccount(
-            id: widget.existing!.id, name: name, cnic: cnic, password: pass,
+            id: widget.existing!.id, name: name, cnic: phone, password: pass,
             isSuper: isSuper, permissions: perms)
         : await widget.svc.createAdminAccount(
-            name: name, cnic: cnic, password: pass,
+            name: name, cnic: phone, password: pass,
             isSuper: isSuper, permissions: perms);
 
     if (!mounted) return;
@@ -460,25 +443,25 @@ class _AdminAccountFormDialogState extends State<_AdminAccountFormDialog> {
             decoration: _fieldDecoration(hint: 'Name', icon: Icons.badge_outlined),
           ),
           const SizedBox(height: 12),
-          // CNIC field
+          // Phone field
           Stack(children: [
             TextField(
               controller: _cnicCtrl,
-              keyboardType: TextInputType.number,
+              keyboardType: TextInputType.phone,
               inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[\d-]')),
-                _CnicFormatter(),
+                FilteringTextInputFormatter.allow(RegExp(r'[\d]')),
+                LengthLimitingTextInputFormatter(11),
               ],
               style: const TextStyle(color: Colors.white, fontSize: 14),
-              onChanged: (v) => setState(() { _cnicDigits = v.replaceAll('-', '').length; _error = null; }),
-              decoration: _fieldDecoration(hint: '35202-1234567-1', icon: Icons.credit_card_rounded, trailingPad: true),
+              onChanged: (v) => setState(() { _cnicDigits = v.length; _error = null; }),
+              decoration: _fieldDecoration(hint: '03011234567', icon: Icons.phone_rounded, trailingPad: true),
             ),
             Positioned(right: 10, top: 0, bottom: 0,
               child: Center(child: _cnicDigits == 0
                 ? const SizedBox.shrink()
-                : _cnicDigits == 13
+                : _cnicDigits == 11
                   ? Icon(Icons.check_circle_rounded, size: 16, color: kGreen)
-                  : Text('$_cnicDigits/13', style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4))))),
+                  : Text('$_cnicDigits/11', style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4))))),
           ]),
           const SizedBox(height: 12),
           // Password field

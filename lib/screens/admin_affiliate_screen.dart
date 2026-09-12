@@ -241,7 +241,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
     try {
       final res = await _db.client
           .from('affiliate_referrals')
-          .select('*, proposals(name, cnic, status)')
+          .select('*, proposals(name, auth_phone, status)')
           .eq('affiliate_id', affiliate['id'])
           .order('created_at', ascending: false);
       if (!mounted) { setState(() => _sheetOpen = false); return; }
@@ -339,7 +339,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
                         final isSelected = selected.contains(rid);
                         final createdAt = r['created_at'] as String?;
                         final dateLabel = createdAt != null ? _fmtDate(createdAt) : '';
-                        final cnic = proposal?['cnic'] as String? ?? 'N/A';
+                        final cnic = proposal?['auth_phone'] as String? ?? 'N/A';
 
                         return GestureDetector(
                           onLongPress: () => setSheet(() { selecting = true; selected.add(rid); }),
@@ -387,7 +387,7 @@ class _AdminAffiliateScreenState extends State<AdminAffiliateScreen> {
                                 ]),
                                 SizedBox(height: _S.of(ctx).s(3)),
                                 Row(children: [
-                                  Text('CNIC: $cnic', style: TextStyle(fontSize: _S.of(ctx).f(11), color: _kSub)),
+                                  Text('Phone: $cnic', style: TextStyle(fontSize: _S.of(ctx).f(11), color: _kSub)),
                                   const Spacer(),
                                   Text('Rs ${((r['commission_amount'] ?? 0) as num).toInt()}',
                                     style: TextStyle(fontSize: _S.of(ctx).f(12), fontWeight: FontWeight.w700, color: _kText)),

@@ -1156,15 +1156,26 @@ class _SettingOption extends StatelessWidget {
 }
 
 // ── Dashboard Home ─────────────────────────────────────────────────────────────
-class _DashboardHome extends StatelessWidget {
+class _DashboardHome extends StatefulWidget {
   final AdminService svc;
   final int refreshKey;
   final int affiliateTrashCount;
   final int affiliateTotalCount;
   const _DashboardHome({required this.svc, this.refreshKey = 0,
     this.affiliateTrashCount = 0, this.affiliateTotalCount = 0});
+  @override
+  State<_DashboardHome> createState() => _DashboardHomeState();
+}
 
-  double get _monthlyRevenue => svc.monthlyRevenue;
+class _DashboardHomeState extends State<_DashboardHome> {
+  bool _showAi = false; // false = Non-AI (default), true = AI
+
+  AdminService get svc => widget.svc;
+  int get refreshKey => widget.refreshKey;
+  int get affiliateTrashCount => widget.affiliateTrashCount;
+  int get affiliateTotalCount => widget.affiliateTotalCount;
+
+  double get _monthlyRevenue => widget.svc.monthlyRevenue;
 
   static const _monthNames = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -1564,11 +1575,25 @@ class _DashboardHome extends StatelessWidget {
             ),
         ]),
         SizedBox(height: s.s(24)),
-        Text('User Breakdown', style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w700, color: Colors.white)),
+        Row(children: [
+          Text('User Breakdown', style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w700, color: Colors.white)),
+          const Spacer(),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(s.s(20)),
+              border: Border.all(color: Colors.white.withOpacity(0.08)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              _ToggleBtn(label: 'Non-AI', selected: !_showAi, onTap: () => setState(() => _showAi = false)),
+              _ToggleBtn(label: 'AI', selected: _showAi, onTap: () { setState(() => _showAi = true); svc.loadAIUsersIfNeeded(); }),
+            ]),
+          ),
+        ]),
         SizedBox(height: s.s(12)),
-        _StatusBreakdown(svc: svc, refreshKey: refreshKey, affiliateTrashCount: affiliateTrashCount, affiliateTotalCount: affiliateTotalCount),
+        _StatusBreakdown(svc: svc, refreshKey: refreshKey, affiliateTrashCount: affiliateTrashCount, affiliateTotalCount: affiliateTotalCount, showAi: _showAi),
         SizedBox(height: s.s(16)),
-        _CityBreakdownHeader(svc: svc),
+        _CityBreakdownHeader(svc: svc, showAi: _showAi),
       ]),
     );
   }
@@ -1682,12 +1707,72 @@ class _BigStatCard extends StatelessWidget {
   }
 }
 
-class _StatusBreakdown extends StatelessWidget {
+class _StatusBreakdown extends StatefulWidget {
   final AdminService svc;
   final int refreshKey;
   final int affiliateTrashCount;
   final int affiliateTotalCount;
-  const _StatusBreakdown({required this.svc, this.refreshKey = 0, this.affiliateTrashCount = 0, this.affiliateTotalCount = 0});
+  final bool showAi;
+  const _StatusBreakdown({required this.svc, this.refreshKey = 0, this.affiliateTrashCount = 0, this.affiliateTotalCount = 0, this.showAi = true});
+  @override State<_StatusBreakdown> createState() => _StatusBreakdownState();
+}
+
+class _StatusBreakdownState extends State<_StatusBreakdown> {
+  Map<String, int>? _aiStats;
+  bool _aiLoading = false;
+
+  @override
+  void didUpdateWidget(_StatusBreakdown old) {
+    super.didUpdateWidget(old);
+    if (widget.showAi && !old.showAi) _loadAiStats();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.showAi) _loadAiStats();
+  }
+
+  Future<void> _loadAiStats() async {
+    if (_aiLoading) return;
+    setState(() => _aiLoading = true);
+    try {
+      final res = await SupabaseService.instance.client
+          .from('proposals')
+          .select('gender, city, country, status, submission_source, admin_notes')
+          .or('admin_notes.eq.AI_IMPORTED,submission_source.eq.ai_batch')
+          .neq('status', 'deleted');
+      final rows = (res as List).cast<Map<String, dynamic>>();
+      int male = 0, female = 0, local = 0, overseas = 0;
+      final citySet = <String>{};
+      final countrySet = <String>{};
+      for (final r in rows) {
+        final gender = (r['gender'] as String? ?? '').toLowerCase();
+        if (gender == 'male') male++; else if (gender == 'female') female++;
+        final country = r['country'] as String? ?? '';
+        final isOverseas = country.isNotEmpty && country.toLowerCase() != 'pakistan';
+        if (isOverseas) {
+          String c = country;
+          if (c.toLowerCase() == 'united arab emirates' || c.toLowerCase() == 'uae') c = 'UAE';
+          else if (c.toLowerCase() == 'united kingdom' || c.toLowerCase() == 'uk') c = 'UK';
+          else if (c.toLowerCase() == 'united states' || c.toLowerCase() == 'usa') c = 'USA';
+          else if (c.toLowerCase() == 'ksa' || c.toLowerCase() == 'saudi arabia') c = 'Saudi Arabia';
+          countrySet.add(c);
+          overseas++;
+        } else {
+          final city = r['city'] as String? ?? '';
+          if (city.isNotEmpty && city != 'Other') citySet.add(city);
+          local++;
+        }
+      }
+      if (mounted) setState(() {
+        _aiStats = { 'male': male, 'female': female, 'local': local, 'overseas': overseas, 'cities': citySet.length, 'countries': countrySet.length, 'total': rows.length };
+        _aiLoading = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _aiLoading = false);
+    }
+  }
 
   bool _hasFeaturedBoostToday(AdminUser u) {
     final now = DateTime.now();
@@ -1697,6 +1782,11 @@ class _StatusBreakdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final showAi = widget.showAi;
+    final svc = widget.svc;
+    final refreshKey = widget.refreshKey;
+    final affiliateTotalCount = widget.affiliateTotalCount;
+
     final users = svc.users;
     final active   = users.where((u) => u.status == ProposalStatus.active && u.subscriptionStatus == SubscriptionStatus.active).length;
     final inactive = users.where((u) =>
@@ -1705,18 +1795,14 @@ class _StatusBreakdown extends StatelessWidget {
          (u.adminNotes == 'AI_IMPORTED' || u.submissionSource == 'ai_batch'))).length;
     final paused   = users.where((u) => u.status == ProposalStatus.paused).length;
     final featured = users.where((u) => _hasFeaturedBoostToday(u)).length;
-    final pending  = users.where((u) => u.status == ProposalStatus.pending).length;
+    final pending  = users.where((u) => u.status == ProposalStatus.pending && !u.isOrderArchived).length;
     final rejected = users.where((u) => u.status == ProposalStatus.deleted && u.deletedFrom == 'orders').length;
     final removed  = users.where((u) => u.status == ProposalStatus.deleted && u.deletedFrom == 'users').length;
     final affiliate = affiliateTotalCount;
 
-    // Use the same filter as the Active chip in the users screen (subscription
-    // status only) so the male/female counts here always match what that chip shows.
-    final activeUsers = users.where((u) => u.subscriptionStatus == SubscriptionStatus.active);
-    final activeMale   = activeUsers.where((u) => u.gender.toLowerCase() == 'male').length;
-    final activeFemale = activeUsers.where((u) => u.gender.toLowerCase() == 'female').length;
-    // Count cities/countries using the exact same logic as the User Location
-    // section below — so the numbers always match what's shown there.
+    final Iterable<AdminUser> genderPool = users.where((u) => u.subscriptionStatus == SubscriptionStatus.active);
+    final activeMale   = genderPool.where((u) => u.gender.toLowerCase() == 'male').length;
+    final activeFemale = genderPool.where((u) => u.gender.toLowerCase() == 'female').length;
     final localCitySet = <String>{};
     final countrySet = <String>{};
     for (final u in users) {
@@ -1739,8 +1825,6 @@ class _StatusBreakdown extends StatelessWidget {
     }
     final totalCities    = localCitySet.length;
     final totalCountries = countrySet.length;
-
-    // Local vs Overseas
     final localCount = users.where((u) =>
       u.status != ProposalStatus.deleted &&
       u.status != ProposalStatus.pending &&
@@ -1753,20 +1837,36 @@ class _StatusBreakdown extends StatelessWidget {
       u.subscriptionStatus != SubscriptionStatus.expired &&
       u.country != null && u.country!.isNotEmpty && u.country!.toLowerCase() != 'pakistan'
     ).length;
-
-    final row1 = [('Active', active), ('Inactive', inactive), ('Paused', paused), ('Featured', featured)];
-    final row2 = [('Pending', pending), ('Rejected', rejected), ('Removed', removed), ('Affiliate', affiliate)];
-    final row3 = [('Male', activeMale), ('Female', activeFemale), ('Cities', totalCities), ('Countries', totalCountries)];
+    final archived  = users.where((u) => u.isOrderArchived).length;
+    final viewOnly  = users.where((u) => u.subscriptionStatus == SubscriptionStatus.docPending).length;
 
     final sc = _S.of(context);
+    // All cells use Expanded so every row fills the full card width equally,
+    // whether there are 2 or 4 items — numbers/labels are centered in their slot.
     Widget cell(String label, int count) => Expanded(
-      child: Column(children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
         _CountUp(end: count, refreshKey: refreshKey,
           style: TextStyle(fontSize: sc.f(22), fontWeight: FontWeight.w800, color: count == 0 ? Colors.white24 : kPurple)),
         SizedBox(height: sc.s(2)),
         Text(label, style: TextStyle(fontSize: sc.f(10.5), color: Colors.white.withOpacity(0.4))),
       ]),
     );
+    Widget scell(String label, int count) => cell(label, count);
+    // For rows with only 2 items that should align under the first two
+    // columns of a 4-column row above (instead of splitting the full width
+    // into 2 equal halves), pad with invisible spacer slots on the right.
+    Widget halfRow(String label1, int count1, String label2, int count2) => Row(children: [
+      cell(label1, count1),
+      cell(label2, count2),
+      const Expanded(child: SizedBox()),
+      const Expanded(child: SizedBox()),
+    ]);
+
+    Widget divider() => Column(children: [
+      SizedBox(height: sc.s(14)),
+      Container(height: 1, color: Colors.white.withOpacity(0.07)),
+      SizedBox(height: sc.s(14)),
+    ]);
 
     return Container(
       padding: EdgeInsets.all(sc.s(16)),
@@ -1775,48 +1875,61 @@ class _StatusBreakdown extends StatelessWidget {
         borderRadius: BorderRadius.circular(sc.s(18)),
         border: Border.all(color: Colors.white.withOpacity(0.07)),
       ),
-      child: Column(children: [
-        Row(children: row1.map((t) => cell(t.$1, t.$2)).toList()),
-        SizedBox(height: sc.s(14)),
-        Container(height: 1, color: Colors.white.withOpacity(0.07)),
-        SizedBox(height: sc.s(14)),
-        Row(children: row2.map((t) => cell(t.$1, t.$2)).toList()),
-        SizedBox(height: sc.s(14)),
-        Container(height: 1, color: Colors.white.withOpacity(0.07)),
-        SizedBox(height: sc.s(14)),
-        Row(children: row3.map((t) => cell(t.$1, t.$2)).toList()),
-        SizedBox(height: sc.s(14)),
-        Container(height: 1, color: Colors.white.withOpacity(0.07)),
-        SizedBox(height: sc.s(14)),
-        FutureBuilder<List<int>>(
-          future: Future.wait([
-            SupabaseService.instance.client.from('coupon_codes').select('id').then((r) => (r as List).length),
-            SupabaseService.instance.client.from('ads').select('id').then((r) => (r as List).length),
-          ]),
-          builder: (_, snap) {
-            final d = snap.data ?? [0, 0];
-            return Row(children: [cell('Local', localCount), cell('Overseas', overseasCount), cell('Coupons', d[0]), cell('Ads', d[1])]);
-          },
-        ),
-        SizedBox(height: sc.s(14)),
-        Container(height: 1, color: Colors.white.withOpacity(0.07)),
-        SizedBox(height: sc.s(14)),
-        FutureBuilder<List<int>>(
-          future: Future.wait([
-            SupabaseService.instance.client.from('profile_edit_requests').select('proposal_id').eq('status', 'applied')
-                .then((r) => (r as List).map((e) => e['proposal_id']).toSet().length),
-            SupabaseService.instance.client.from('profile_reports').select('id').eq('status', 'pending').then((r) => (r as List).length),
-            SupabaseService.instance.client.from('proposals').select('id')
-                .gte('last_seen_at', DateTime.now().subtract(const Duration(minutes: 6)).toUtc().toIso8601String())
-                .then((r) => (r as List).length),
-            SupabaseService.instance.client.from('admin_accounts').select('id').then((r) => (r as List).length),
-          ]),
-          builder: (_, snap) {
-            final d = snap.data ?? [0, 0, 0, 0];
-            return Row(children: [cell('Review', d[0]), cell('Report', d[1]), cell('Online', d[2]), cell('Admins', d[3])]);
-          },
-        ),
-      ]),
+      child: FutureBuilder<List<int>>(
+        future: Future.wait([
+          SupabaseService.instance.client.from('coupon_codes').select('id').then((r) => (r as List).length),
+          SupabaseService.instance.client.from('ads').select('id').then((r) => (r as List).length),
+          SupabaseService.instance.client.from('profile_edit_requests').select('proposal_id').eq('status', 'applied')
+              .then((r) => (r as List).map((e) => e['proposal_id']).toSet().length),
+          SupabaseService.instance.client.from('profile_reports').select('id').eq('status', 'pending').then((r) => (r as List).length),
+          SupabaseService.instance.client.from('proposals').select('id')
+              .gte('last_seen_at', DateTime.now().subtract(const Duration(minutes: 6)).toUtc().toIso8601String())
+              .then((r) => (r as List).length),
+          SupabaseService.instance.client.from('admin_accounts').select('id').then((r) => (r as List).length),
+        ]),
+        builder: (_, snap) {
+          final d = snap.data ?? [0, 0, 0, 0, 0, 0];
+          final coupons = d[0]; final ads = d[1];
+          final review = d[2]; final report = d[3];
+          final online = d[4]; final admins = d[5];
+
+          if (showAi) {
+            if (_aiLoading || _aiStats == null) {
+              return const Center(child: Padding(
+                padding: EdgeInsets.all(24),
+                child: CircularProgressIndicator(color: kPurple, strokeWidth: 2),
+              ));
+            }
+            final s = _aiStats!;
+            return Column(children: [
+              Row(children: [cell('Male', s['male']!), cell('Female', s['female']!), cell('Cities', s['cities']!), cell('Countries', s['countries']!)]),
+              divider(),
+              halfRow('Local', s['local']!, 'Overseas', s['overseas']!),
+            ]);
+          }
+
+          // Non-AI mode — full rows of 4 use cell(), short rows use scell()
+          // Row 1: Active, Inactive, Paused, Featured
+          // Row 2: Pending, Rejected, Removed, Archived
+          // Row 3: View Only, Affiliate, Male, Female
+          // Row 4: Cities, Countries, Local, Overseas
+          // Row 5: Coupons, Ads, Review, Report
+          // Row 6: Online, Admins (2 — fixed width)
+          return Column(children: [
+            Row(children: [cell('Active', active), cell('Inactive', inactive), cell('Paused', paused), cell('Featured', featured)]),
+            divider(),
+            Row(children: [cell('Pending', pending), cell('Rejected', rejected), cell('Removed', removed), cell('Archived', archived)]),
+            divider(),
+            Row(children: [cell('View Only', viewOnly), cell('Affiliate', affiliate), cell('Male', activeMale), cell('Female', activeFemale)]),
+            divider(),
+            Row(children: [cell('Cities', totalCities), cell('Countries', totalCountries), cell('Local', localCount), cell('Overseas', overseasCount)]),
+            divider(),
+            Row(children: [cell('Coupons', coupons), cell('Ads', ads), cell('Review', review), cell('Report', report)]),
+            divider(),
+            halfRow('Online', online, 'Admins', admins),
+          ]);
+        },
+      ),
     );
   }
 }
@@ -1824,47 +1937,114 @@ class _StatusBreakdown extends StatelessWidget {
 // ── City Breakdown ─────────────────────────────────────────────────────────────
 class _CityBreakdownHeader extends StatefulWidget {
   final AdminService svc;
-  const _CityBreakdownHeader({required this.svc});
+  final bool showAi;
+  const _CityBreakdownHeader({required this.svc, this.showAi = true});
   @override
   State<_CityBreakdownHeader> createState() => _CityBreakdownHeaderState();
 }
 
 class _CityBreakdownHeaderState extends State<_CityBreakdownHeader> {
   bool _isLocal = true;
+  Map<String, int>? _aiLocalMap;
+  Map<String, int>? _aiOverseasMap;
+  bool _aiLoading = false;
+
+  static bool _isAiProfile(AdminUser u) =>
+      u.adminNotes == 'AI_IMPORTED' || u.submissionSource == 'ai_batch';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.showAi) _loadAiCities();
+  }
+
+  @override
+  void didUpdateWidget(_CityBreakdownHeader old) {
+    super.didUpdateWidget(old);
+    if (widget.showAi && !old.showAi) _loadAiCities();
+  }
+
+  Future<void> _loadAiCities() async {
+    if (_aiLoading) return;
+    setState(() => _aiLoading = true);
+    try {
+      final res = await SupabaseService.instance.client
+          .from('proposals')
+          .select('city, country, location, status, submission_source, admin_notes')
+          .or('admin_notes.eq.AI_IMPORTED,submission_source.eq.ai_batch')
+          .neq('status', 'deleted');
+      final rows = (res as List).cast<Map<String, dynamic>>();
+      final localMap = <String, int>{};
+      final overseasMap = <String, int>{};
+      for (final r in rows) {
+        final status = r['status'] as String? ?? '';
+        if (status == 'pending') continue;
+        final country = r['country'] as String? ?? '';
+        final isOverseas = country.isNotEmpty && country.toLowerCase() != 'pakistan';
+        if (isOverseas) {
+          String c = country;
+          if (c.toLowerCase() == 'united arab emirates' || c.toLowerCase() == 'uae') c = 'UAE';
+          else if (c.toLowerCase() == 'united kingdom' || c.toLowerCase() == 'uk') c = 'UK';
+          else if (c.toLowerCase() == 'united states' || c.toLowerCase() == 'usa') c = 'USA';
+          else if (c.toLowerCase() == 'ksa' || c.toLowerCase() == 'saudi arabia') c = 'Saudi Arabia';
+          overseasMap[c] = (overseasMap[c] ?? 0) + 1;
+        } else {
+          final city = r['city'] as String? ?? '';
+          final location = r['location'] as String? ?? '';
+          final cityName = city == 'Other' && location.isNotEmpty ? location : city;
+          if (cityName.isNotEmpty && cityName != 'Other') {
+            localMap[cityName] = (localMap[cityName] ?? 0) + 1;
+          }
+        }
+      }
+      if (mounted) setState(() {
+        _aiLocalMap = localMap;
+        _aiOverseasMap = overseasMap;
+        _aiLoading = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _aiLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final s = _S.of(context);
-    final users = widget.svc.users;
 
-    // Build local (Pakistan) city map
-    final localMap = <String, int>{};
-    final overseasMap = <String, int>{};
-    for (final u in users) {
-      if (u.status == ProposalStatus.deleted) continue;
-      if (u.status == ProposalStatus.pending) continue;
-      if (u.subscriptionStatus == SubscriptionStatus.expired) continue;
-      final isOverseas = u.country != null && u.country!.isNotEmpty &&
-          u.country!.toLowerCase() != 'pakistan';
-      if (isOverseas) {
-        // Normalize UAE variants
-        String country = u.country!;
-        if (country.toLowerCase() == 'united arab emirates' || country.toLowerCase() == 'uae') {
-          country = 'UAE';
-        } else if (country.toLowerCase() == 'united kingdom' || country.toLowerCase() == 'uk') {
-          country = 'UK';
-        } else if (country.toLowerCase() == 'united states' || country.toLowerCase() == 'united states of america' || country.toLowerCase() == 'usa') {
-          country = 'USA';
-        } else if (country.toLowerCase() == 'ksa' || country.toLowerCase() == 'saudi arabia') {
-          country = 'Saudi Arabia';
-        }
-        overseasMap[country] = (overseasMap[country] ?? 0) + 1;
-      } else {
-        final cityName = u.city == 'Other' && (u.location?.isNotEmpty ?? false)
-            ? u.location!
-            : u.city;
-        if (cityName.isNotEmpty && cityName != 'Other') {
-          localMap[cityName] = (localMap[cityName] ?? 0) + 1;
+    Map<String, int> localMap;
+    Map<String, int> overseasMap;
+
+    if (widget.showAi) {
+      if (_aiLoading || _aiLocalMap == null) {
+        return const Center(child: Padding(
+          padding: EdgeInsets.all(24),
+          child: CircularProgressIndicator(color: kPurple, strokeWidth: 2),
+        ));
+      }
+      localMap = _aiLocalMap!;
+      overseasMap = _aiOverseasMap!;
+    } else {
+      final users = widget.svc.users;
+      localMap = <String, int>{};
+      overseasMap = <String, int>{};
+      for (final u in users) {
+        if (u.status == ProposalStatus.deleted) continue;
+        if (u.status == ProposalStatus.pending) continue;
+        if (u.subscriptionStatus == SubscriptionStatus.expired) continue;
+        final isOverseas = u.country != null && u.country!.isNotEmpty &&
+            u.country!.toLowerCase() != 'pakistan';
+        if (isOverseas) {
+          String country = u.country!;
+          if (country.toLowerCase() == 'united arab emirates' || country.toLowerCase() == 'uae') country = 'UAE';
+          else if (country.toLowerCase() == 'united kingdom' || country.toLowerCase() == 'uk') country = 'UK';
+          else if (country.toLowerCase() == 'united states' || country.toLowerCase() == 'united states of america' || country.toLowerCase() == 'usa') country = 'USA';
+          else if (country.toLowerCase() == 'ksa' || country.toLowerCase() == 'saudi arabia') country = 'Saudi Arabia';
+          overseasMap[country] = (overseasMap[country] ?? 0) + 1;
+        } else {
+          final cityName = u.city == 'Other' && (u.location?.isNotEmpty ?? false) ? u.location! : u.city;
+          if (cityName.isNotEmpty && cityName != 'Other') {
+            localMap[cityName] = (localMap[cityName] ?? 0) + 1;
+          }
         }
       }
     }
@@ -1909,7 +2089,7 @@ class _CityBreakdownHeaderState extends State<_CityBreakdownHeader> {
         )
       else
         Container(
-          padding: EdgeInsets.all(s.s(16)),
+          padding: EdgeInsets.fromLTRB(s.s(16), s.s(0), s.s(16), s.s(16)),
           decoration: BoxDecoration(
             color: const Color(0xFF16132A),
             borderRadius: BorderRadius.circular(s.s(18)),
@@ -1965,13 +2145,19 @@ class _CityBreakdownHeaderState extends State<_CityBreakdownHeader> {
       final fraction = maxCount > 0 ? entry.value / maxCount : 0.0;
       return _locationRow(entry, fraction, maxCount, s);
     }
-    // Show 12 rows visible, rest scrollable — no divider, seamless flow
-    final itemHeight = s.s(10) + s.d(6) + s.s(10); // separator + bar + padding
+    // Show up to 12 rows, rest scrollable — no divider, seamless flow.
+    // The list always shrink-wraps to its real content height (so a short
+    // list — e.g. only 10 cities — hugs the top with no leftover space);
+    // a maxHeight cap only kicks in once there are more than 12 rows, at
+    // which point the list becomes scrollable within that cap.
+    final itemHeight = s.s(24) + s.s(10); // row (text line height) + separator
     final visibleHeight = 12 * itemHeight;
-    return SizedBox(
-      height: sorted.length <= 12 ? null : visibleHeight,
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: sorted.length <= 12 ? double.infinity : visibleHeight,
+      ),
       child: ListView.separated(
-        shrinkWrap: sorted.length <= 12,
+        shrinkWrap: true,
         physics: sorted.length <= 12
             ? const NeverScrollableScrollPhysics()
             : const ClampingScrollPhysics(),
@@ -2037,7 +2223,7 @@ class _EditRequestsHeaderBadgeState extends State<_EditRequestsHeaderBadge> {
     try {
       final data = await Supabase.instance.client
           .from('profile_edit_requests')
-          .select('*, proposals(name, city, cnic, proposal_number)')
+          .select('*, proposals(name, city, auth_phone, proposal_number)')
           .order('submitted_at', ascending: true)
           .limit(1000);
 

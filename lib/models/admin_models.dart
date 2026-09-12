@@ -59,15 +59,14 @@ class ActivationCode {
 }
 
 // ── Admin Account ────────────────────────────────────────────────────────────
-// A CNIC + password login created from Dashboard → Settings → Create Admin.
-// Logging in with these credentials on the regular login screen unlocks
-// full (unblurred / unmasked) viewing of all profiles in the app — it does
-// NOT grant access to this Admin Panel itself (that's the separate 6-digit
-// PIN on the panel's own login screen).
+// A phone + password login created from Dashboard → Settings → Create Admin.
+// Stored in admin_accounts.phone (not cnic — that column no longer exists).
 class AdminAccount {
   final String id;
   final String name;
-  final String cnic;
+  /// The admin's login phone number (stored in admin_accounts.phone column).
+  /// Field kept named 'phone' to match the DB column and OTP auth approach.
+  final String phone;
   final String password;
   final DateTime createdAt;
 
@@ -80,7 +79,7 @@ class AdminAccount {
   const AdminAccount({
     required this.id,
     required this.name,
-    required this.cnic,
+    required this.phone,
     required this.password,
     required this.createdAt,
     this.isSuper = false,
@@ -90,7 +89,7 @@ class AdminAccount {
   factory AdminAccount.fromMap(Map<String, dynamic> map) => AdminAccount(
         id: map['id'] as String,
         name: map['name'] as String,
-        cnic: map['cnic'] as String,
+        phone: (map['phone'] ?? '') as String,
         password: map['password'] as String,
         createdAt: DateTime.parse(map['created_at'] as String),
         isSuper: map['is_super'] == true,
@@ -294,6 +293,7 @@ class AdminUser {
   final bool emailVerified;
   final bool cnicVerified;
   final String? cnic;
+  final String? authPhone;
   final String? password;
   final bool? smokes;
   final bool? drinks;
@@ -316,6 +316,7 @@ class AdminUser {
   final String? deletedFrom;
   final String? deletionReason;
   final String? adminNotes;
+  final String? submitterType; // 'self' | 'guardian' | null (null = old profile)
   final bool registrationAllowed;
   // Admin-only tick on AI-imported cards in the Users screen.
   final bool aiContacted;
@@ -349,6 +350,13 @@ class AdminUser {
   final String? paymentProofPlan;
   final String? paymentProofType;
 
+  // Featured post payment proof
+  final String? featuredProofUrl;
+  final String? featuredProofStatus;
+  final String? featuredProofId; // pending_featured_requests.id
+  final int paymentProofCount;   // total rishta proof screenshots ever submitted
+  final int featuredProofCount;  // total featured proof screenshots ever submitted
+
   // Orders screen archive flag — admin can snooze a pending order
   final bool isOrderArchived;
   final DateTime? archivedAt;
@@ -369,7 +377,7 @@ class AdminUser {
     this.hasCar, this.hasOtherProperty, this.otherProperty, this.carName, this.hasGenerator, this.hasSolar, this.hasServant,
     this.lookingFor, this.about, required this.contactPhone, this.contactPhone2, this.contactPerson, this.contactPerson2,
     this.phoneVerified = false, this.emailVerified = false, this.cnicVerified = false,
-    this.cnic, this.password, this.smokes, this.drinks, this.monthlyIncome, this.hasDisability,
+    this.cnic, this.authPhone, this.password, this.smokes, this.drinks, this.monthlyIncome, this.hasDisability,
     this.physicallyActive, required this.postedAt,
     this.status = ProposalStatus.pending,
     this.subscriptionTier = SubscriptionTier.none,
@@ -377,10 +385,12 @@ class AdminUser {
     this.subscriptionStart, this.subscriptionExpiry,
     this.totalSpending = 0, this.featuredPointsPurchased = 0, this.featuredPointsUsed = 0,
     this.featuredSchedule = const [], this.activationCode, this.pendingFeaturedTokens = 0,
-    this.deletedFrom, this.deletionReason, this.adminNotes, this.registrationAllowed = false, this.aiContacted = false, this.docVerification = const {}, this.isDocVerified = false, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
+    this.deletedFrom, this.deletionReason, this.adminNotes, this.submitterType, this.registrationAllowed = false, this.aiContacted = false, this.docVerification = const {}, this.isDocVerified = false, this.discarded, this.suggestedInfo, this.profilePhoto, this.cnicFront, this.cnicBack,
     this.guardianCnicFront, this.guardianCnicBack, this.educationDocument, this.hasPendingVerificationRequest = false,
     this.appliedCouponCode, this.submissionSource, this.lastSeenAt, this.lastSeenSource,
     this.paymentProofUrl, this.paymentProofStatus, this.paymentProofPlan, this.paymentProofType,
+    this.featuredProofUrl, this.featuredProofStatus, this.featuredProofId,
+    this.paymentProofCount = 0, this.featuredProofCount = 0,
     this.isOrderArchived = false,
     this.archivedAt,
   });
@@ -498,7 +508,7 @@ class AdminUser {
       phoneVerified: json['phone_verified'] as bool? ?? false,
       emailVerified: json['email_verified'] as bool? ?? false,
       cnicVerified: json['cnic_verified'] as bool? ?? false,
-      cnic: json['cnic'] as String?, password: json['password'] as String?, smokes: json['smokes'] as bool?,
+      cnic: json['cnic'] as String?, authPhone: json['auth_phone'] as String?, password: json['password'] as String?, smokes: json['smokes'] as bool?,
       drinks: json['drinks'] as bool?,
       monthlyIncome: json['monthly_income'] as String?,
       hasDisability: json['has_disability'] == null ? null : (json['has_disability'] == true || json['has_disability'] == 'true' || json['has_disability'] == 'Yes' ? 'Yes' : 'No'),
@@ -516,6 +526,7 @@ class AdminUser {
       deletedFrom: json['deleted_from'] as String?,
       deletionReason: json['deletion_reason'] as String?,
       adminNotes: json['admin_notes'] as String?,
+      submitterType: json['submitter_type'] as String?,
       registrationAllowed: json['registration_allowed'] as bool? ?? false,
       aiContacted: json['ai_contacted'] as bool? ?? false,
       docVerification: (json['doc_verification'] as Map<String, dynamic>? ?? {})
@@ -536,6 +547,11 @@ class AdminUser {
       paymentProofStatus: json['payment_proof_status'] as String?,
       paymentProofPlan: json['payment_proof_plan'] as String?,
       paymentProofType: json['payment_proof_type'] as String?,
+      featuredProofUrl: json['featured_proof_url'] as String?,
+      featuredProofStatus: json['featured_proof_status'] as String?,
+      featuredProofId: json['featured_proof_id'] as String?,
+      paymentProofCount: (json['payment_proof_count'] as num?)?.toInt() ?? 0,
+      featuredProofCount: (json['featured_proof_count'] as num?)?.toInt() ?? 0,
       isOrderArchived: (json['is_order_archived'] as bool?) ?? false,
       archivedAt: json['archived_at'] != null ? DateTime.parse(json['archived_at'] as String).toLocal() : null,
     );
@@ -572,7 +588,7 @@ class AdminUser {
     if (contactPhone2 != null) 'contact_phone_2': contactPhone2,
     if (contactPhone2 == null || contactPhone2!.isEmpty) 'contact_phone_2': null,
     'phone_verified': phoneVerified, 'email_verified': emailVerified,
-    'cnic_verified': cnicVerified, 'cnic': cnic, 'password': password, 'admin_notes': adminNotes, 'registration_allowed': registrationAllowed,
+    'cnic_verified': cnicVerified, 'auth_phone': authPhone, 'admin_notes': adminNotes, 'submitter_type': submitterType, 'registration_allowed': registrationAllowed,
     'profile_photo_url': profilePhoto,
     'cnic_front_url': cnicFront,
     'cnic_back_url': cnicBack,
@@ -615,15 +631,18 @@ class AdminUser {
     Object? motherOccupation = _unset, int? sisters, int? brothers, Object? homeType = _unset, Object? houseSize = _unset,
     Object? hasCar = _unset, Object? hasOtherProperty = _unset, Object? otherProperty = _unset, Object? carName = _unset, Object? location = _unset, Object? country = _unset, bool? hasGenerator, bool? hasSolar, bool? hasServant,
     Object? lookingFor = _unset, Object? about = _unset, String? contactPhone, String? contactPhone2, String? contactPerson, String? contactPerson2, bool? phoneVerified,
-    bool? emailVerified, bool? cnicVerified, Object? cnic = _unset, Object? smokes = _unset, bool? drinks,
+    bool? emailVerified, bool? cnicVerified, Object? cnic = _unset, Object? authPhone = _unset, Object? smokes = _unset, bool? drinks,
     Object? monthlyIncome = _unset, Object? hasDisability = _unset, Object? physicallyActive = _unset, String? disabilityDetails,
     bool? hasKids, Object? hasSiblings = _unset,
-    int? pendingFeaturedTokens, String? deletedFrom, Object? deletionReason = _unset, String? adminNotes, bool? registrationAllowed, bool? aiContacted, Map<String, String>? docVerification, bool? isDocVerified,
+    int? pendingFeaturedTokens, String? deletedFrom, Object? deletionReason = _unset, String? adminNotes, String? submitterType, bool? registrationAllowed, bool? aiContacted, Map<String, String>? docVerification, bool? isDocVerified,
     Object? profilePhoto = _unset, Object? cnicFront = _unset, Object? cnicBack = _unset, String? password,
     Object? guardianCnicFront = _unset, Object? guardianCnicBack = _unset, Object? educationDocument = _unset,
     String? appliedCouponCode, String? submissionSource,
     Object? paymentProofUrl = _unset, Object? paymentProofStatus = _unset,
     Object? paymentProofPlan = _unset, Object? paymentProofType = _unset,
+    Object? featuredProofUrl = _unset, Object? featuredProofStatus = _unset,
+    Object? featuredProofId = _unset,
+    Object? paymentProofCount = _unset, Object? featuredProofCount = _unset,
     bool? isOrderArchived,
     Object? archivedAt = _unset,
   }) => AdminUser(
@@ -659,7 +678,7 @@ class AdminUser {
     hasServant: hasServant ?? this.hasServant, lookingFor: lookingFor is _Unset ? this.lookingFor : lookingFor as String?,
     about: about is _Unset ? this.about : about as String?, contactPhone: contactPhone ?? this.contactPhone, contactPhone2: contactPhone2 ?? this.contactPhone2, contactPerson: contactPerson ?? this.contactPerson, contactPerson2: contactPerson2 ?? this.contactPerson2,
     phoneVerified: phoneVerified ?? this.phoneVerified, emailVerified: emailVerified ?? this.emailVerified,
-    cnicVerified: cnicVerified ?? this.cnicVerified, cnic: cnic is _Unset ? this.cnic : cnic as String?, password: password ?? this.password,
+    cnicVerified: cnicVerified ?? this.cnicVerified, cnic: cnic is _Unset ? this.cnic : cnic as String?, authPhone: authPhone is _Unset ? this.authPhone : authPhone as String?, password: password ?? this.password,
     smokes: smokes is _Unset ? this.smokes : smokes as bool?, drinks: drinks ?? this.drinks,
     monthlyIncome: monthlyIncome is _Unset ? this.monthlyIncome : monthlyIncome as String?, hasDisability: hasDisability is _Unset ? this.hasDisability : hasDisability as String?,
     physicallyActive: physicallyActive is _Unset ? this.physicallyActive : physicallyActive as String?,
@@ -675,7 +694,7 @@ class AdminUser {
     featuredSchedule: featuredSchedule ?? this.featuredSchedule,
     activationCode: activationCode ?? this.activationCode,
     pendingFeaturedTokens: pendingFeaturedTokens ?? this.pendingFeaturedTokens,
-    deletedFrom: deletedFrom ?? this.deletedFrom, deletionReason: deletionReason is _Unset ? this.deletionReason : deletionReason as String?, adminNotes: adminNotes ?? this.adminNotes, registrationAllowed: registrationAllowed ?? this.registrationAllowed, aiContacted: aiContacted ?? this.aiContacted, docVerification: docVerification ?? this.docVerification, isDocVerified: isDocVerified ?? this.isDocVerified, discarded: discarded ?? this.discarded, suggestedInfo: suggestedInfo ?? this.suggestedInfo,
+    deletedFrom: deletedFrom ?? this.deletedFrom, deletionReason: deletionReason is _Unset ? this.deletionReason : deletionReason as String?, adminNotes: adminNotes ?? this.adminNotes, submitterType: submitterType ?? this.submitterType, registrationAllowed: registrationAllowed ?? this.registrationAllowed, aiContacted: aiContacted ?? this.aiContacted, docVerification: docVerification ?? this.docVerification, isDocVerified: isDocVerified ?? this.isDocVerified, discarded: discarded ?? this.discarded, suggestedInfo: suggestedInfo ?? this.suggestedInfo,
     profilePhoto: profilePhoto is _Unset ? this.profilePhoto : profilePhoto as String?,
     cnicFront: cnicFront is _Unset ? this.cnicFront : cnicFront as String?,
     cnicBack: cnicBack is _Unset ? this.cnicBack : cnicBack as String?,
@@ -689,6 +708,11 @@ class AdminUser {
     paymentProofStatus: paymentProofStatus is _Unset ? this.paymentProofStatus : paymentProofStatus as String?,
     paymentProofPlan: paymentProofPlan is _Unset ? this.paymentProofPlan : paymentProofPlan as String?,
     paymentProofType: paymentProofType is _Unset ? this.paymentProofType : paymentProofType as String?,
+    featuredProofUrl: featuredProofUrl is _Unset ? this.featuredProofUrl : featuredProofUrl as String?,
+    featuredProofStatus: featuredProofStatus is _Unset ? this.featuredProofStatus : featuredProofStatus as String?,
+    featuredProofId: featuredProofId is _Unset ? this.featuredProofId : featuredProofId as String?,
+    paymentProofCount: paymentProofCount is _Unset ? this.paymentProofCount : paymentProofCount as int,
+    featuredProofCount: featuredProofCount is _Unset ? this.featuredProofCount : featuredProofCount as int,
     isOrderArchived: isOrderArchived ?? this.isOrderArchived,
     archivedAt: archivedAt is _Unset ? this.archivedAt : archivedAt as DateTime?,
   );

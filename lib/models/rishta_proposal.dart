@@ -62,6 +62,7 @@ class RishtaProposal {
   final bool phoneVerified;
   final bool emailVerified;
   final bool cnicVerified;
+  final String? authPhone;
   final bool? smokes;
   final bool? drinks;
   final String? physicallyActive;
@@ -133,6 +134,7 @@ class RishtaProposal {
     this.phoneVerified = false,
     this.emailVerified = false,
     this.cnicVerified = false,
+    this.authPhone,
     this.smokes,
     this.drinks,
     this.physicallyActive,
@@ -222,6 +224,7 @@ class RishtaProposal {
       phoneVerified: json['phone_verified'] as bool? ?? false,
       emailVerified: json['email_verified'] as bool? ?? false,
       cnicVerified: json['cnic_verified'] as bool? ?? false,
+      authPhone: json['auth_phone'] as String?,
       smokes: json['smokes'] as bool?,
       drinks: json['drinks'] as bool?,
       physicallyActive: json['physically_active'] as String?,
