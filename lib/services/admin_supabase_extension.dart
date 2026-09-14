@@ -149,6 +149,16 @@ extension AdminSupabaseExtension on SupabaseService {
   }
 
   // AI tab fetch: paginated 30 at a time, only loaded when admin opens AI tab.
+  Future<int> fetchAIUsersCount() async {
+    final res = await client
+        .from('admin_proposals_summary')
+        .select('id')
+        .or('admin_notes.eq.AI_IMPORTED,submission_source.eq.ai_batch')
+        .neq('status', 'deleted')
+        .count(CountOption.exact);
+    return res.count ?? 0;
+  }
+
   Future<List<AdminUser>> fetchAIUsers({int page = 0}) async {
     final res = await client
         .from('admin_proposals_summary')

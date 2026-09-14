@@ -31,6 +31,7 @@ class AdminService extends ChangeNotifier {
   List<AdminUser> _aiUsers = [];
   int  _aiPage = 0;
   bool _aiUsersLoading = false;
+  int  _aiRealTotal    = 0; // real total from DB, not just loaded count
   bool _aiAllLoaded = false;
   List<ActivationCode> _codes = [];
   List<AdminAccount> _adminAccounts = [];
@@ -114,6 +115,7 @@ class AdminService extends ChangeNotifier {
   bool get aiUsersLoading          => _aiUsersLoading;
   bool get aiAllLoaded             => _aiAllLoaded;
   int  get aiTotalCount            => _aiUsers.length;
+  int  get aiRealTotal             => _aiRealTotal;
   List<ActivationCode> get codes => List.unmodifiable(_codes);
   List<AdminAccount> get adminAccounts => List.unmodifiable(_adminAccounts);
   bool get isLoggedIn => _isLoggedIn;
@@ -246,6 +248,11 @@ class AdminService extends ChangeNotifier {
     _aiUsersLoading = true;
     notifyListeners();
     try {
+      // Fetch real total count on first page so tab shows correct number
+      // even before all pages are loaded.
+      if (_aiPage == 0) {
+        _aiRealTotal = await _db.fetchAIUsersCount();
+      }
       final page = await _db.fetchAIUsers(page: _aiPage);
       for (final u in page) {
         final idx = _aiUsers.indexWhere((e) => e.id == u.id);

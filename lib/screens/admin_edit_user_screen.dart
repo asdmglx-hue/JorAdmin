@@ -1683,12 +1683,15 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
     final String resolvedStatus = status ?? 'pending';
     final Color statusColor = resolvedStatus == 'approved' ? kGreen
         : resolvedStatus == 'rejected' ? kRose
+        : resolvedStatus == 'partially_paid' ? Colors.orange
         : Colors.white.withOpacity(0.4);
     final String statusLabel = resolvedStatus == 'approved' ? 'Approved'
         : resolvedStatus == 'rejected' ? 'Rejected'
+        : resolvedStatus == 'partially_paid' ? 'Partially Paid'
         : 'Pending';
     final IconData statusIcon = resolvedStatus == 'approved' ? Icons.verified_rounded
         : resolvedStatus == 'rejected' ? Icons.cancel_rounded
+        : resolvedStatus == 'partially_paid' ? Icons.warning_amber_rounded
         : Icons.hourglass_empty_rounded;
 
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -1713,6 +1716,11 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
               Icon(Icons.cancel_rounded, color: kRose, size: s.d(16)),
               SizedBox(width: s.s(8)),
               Text('Reject', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: kRose)),
+            ])),
+            PopupMenuItem(value: 'partially_paid', child: Row(children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: s.d(16)),
+              SizedBox(width: s.s(8)),
+              Text('Partially Paid', style: TextStyle(fontSize: s.f(13), fontWeight: FontWeight.w700, color: Colors.orange)),
             ])),
             PopupMenuItem(value: 'clear', child: Row(children: [
               Icon(Icons.delete_outline_rounded, color: Colors.white54, size: s.d(16)),
@@ -2304,6 +2312,30 @@ class _AdminEditUserScreenState extends State<AdminEditUserScreen> {
         });
       } catch (e) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: kRose));
+      }
+      return;
+    }
+    if (val == 'partially_paid') {
+      final confirmed = await _confirmDialog('Mark as Partially Paid?',
+        'Payment will be marked as partially paid. The user will still appear in the feed.');
+      if (!confirmed) return;
+      try {
+        await SupabaseService.instance.client.from('proposals').update({
+          'payment_proof_status': 'partially_paid',
+        }).eq('id', _user.id);
+        setState(() {
+          _user = _user.copyWith(paymentProofStatus: 'partially_paid');
+          _baseline = _user;
+        });
+        widget.svc.updateUser(_user);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Marked as Partially Paid'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 2),
+        ));
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: kRose));
       }
       return;
     }

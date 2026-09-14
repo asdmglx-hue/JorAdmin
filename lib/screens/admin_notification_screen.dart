@@ -18,11 +18,12 @@ class AdminNotificationScreen extends StatefulWidget {
 }
 
 class _NotifItem {
+  final String id;
   final String title;
   final String body;
   final DateTime time;
   final bool read;
-  _NotifItem({required this.title, required this.body, required this.time, required this.read});
+  _NotifItem({required this.id, required this.title, required this.body, required this.time, required this.read});
 }
 
 class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
@@ -54,6 +55,7 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
       final history = rows.map((n) {
         final created = DateTime.tryParse(n['created_at'] as String? ?? '') ?? DateTime.now();
         return _NotifItem(
+          id: n['id'] as String? ?? '',
           title: n['title'] as String? ?? '',
           body: n['body'] as String? ?? '',
           time: created.isUtc ? created.toLocal() : created,
@@ -62,15 +64,7 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
       }).toList();
       debugPrint('[NOTIF_LOAD] Loaded ${history.length} notifications from DB (total rows: ${rows.length})');
       if (mounted) setState(() { _history = history; _loading = false; });
-
-      // Always show what's actually on disk, then mark it read.
-      final unreadIds = rows.where((n) => n['read_at'] == null).map((n) => n['id']).toList();
-      if (unreadIds.isNotEmpty) {
-        await _client
-            .from('notification_log')
-            .update({'read_at': DateTime.now().toUtc().toIso8601String()})
-            .inFilter('id', unreadIds);
-      }
+      // Do NOT auto-mark as read — let the user press "Read All" explicitly.
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
@@ -109,6 +103,31 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
       debugPrint('[NOTIF_CLEAR] UI cleared');
     } catch (e) {
       debugPrint('[NOTIF_CLEAR] Error: $e');
+    }
+  }
+
+  Future<void> _markAllRead() async {
+    final unread = _history.where((n) => !n.read).toList();
+    if (unread.isEmpty) return;
+    try {
+      final unreadIds = (await _client
+          .from('notification_log')
+          .select('id')
+          .isFilter('proposal_id', null)
+          .isFilter('read_at', null)).map((r) => r['id']).toList();
+      if (unreadIds.isNotEmpty) {
+        await _client
+            .from('notification_log')
+            .update({'read_at': DateTime.now().toUtc().toIso8601String()})
+            .inFilter('id', unreadIds);
+      }
+      if (mounted) setState(() {
+        _history = _history.map((n) => _NotifItem(
+          id: n.id, title: n.title, body: n.body, time: n.time, read: true,
+        )).toList();
+      });
+    } catch (e) {
+      debugPrint('[NOTIF_READ_ALL] Error: $e');
     }
   }
 
@@ -161,6 +180,16 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
             style: TextStyle(
                 fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white)),
         actions: [
+          TextButton(
+            onPressed: _history.any((n) => !n.read) ? _markAllRead : null,
+            child: Text('Read All',
+                style: TextStyle(
+                    color: _history.any((n) => !n.read)
+                        ? kPurple
+                        : Colors.white.withOpacity(0.25),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13)),
+          ),
           TextButton(
             onPressed: _history.isNotEmpty ? _clearAll : null,
             child: Text('Clear All',
@@ -252,8 +281,26 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
     );
   }
 
+  Future<void> _markOneRead(_NotifItem n) async {
+    if (n.read || n.id.isEmpty) return;
+    try {
+      await _client.from('notification_log')
+          .update({'read_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', n.id);
+      if (mounted) setState(() {
+        _history = _history.map((item) => item.id == n.id
+            ? _NotifItem(id: item.id, title: item.title, body: item.body, time: item.time, read: true)
+            : item).toList();
+      });
+    } catch (e) {
+      debugPrint('[NOTIF] markOneRead error: $e');
+    }
+  }
+
   Widget _buildItem(_NotifItem n) {
-    return Container(
+    return GestureDetector(
+      onTap: () => _markOneRead(n),
+      child: Container(
       color: n.read ? Colors.transparent : kPurple.withOpacity(0.08),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(
@@ -306,6 +353,6 @@ class _AdminNotificationScreenState extends State<AdminNotificationScreen> {
           ),
         ],
       ),
-    );
+    ));
   }
 }

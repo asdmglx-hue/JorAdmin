@@ -1176,9 +1176,17 @@ class _DashboardHomeState extends State<_DashboardHome> {
   int get affiliateTotalCount => widget.affiliateTotalCount;
 
   double get _monthlyRevenue => widget.svc.monthlyRevenue;
+  double _monthlyExpense  = 0;
+  double _allTimeExpense  = 0;
 
   static const _monthNames = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadExpenses());
+  }
 
   void _confirmResetStats(BuildContext context, AdminService svc, _S s) {
     if (!AdminPerms.i.guardEdit(AdminPageKeys.dashboard, what: 'resetting stats')) return;
@@ -1223,6 +1231,16 @@ class _DashboardHomeState extends State<_DashboardHome> {
 
   /// A simple list of every completed month's frozen revenue — no picker,
   /// no range to get wrong, just "here's what each past month made."
+  Future<void> _loadExpenses() async {
+    try {
+      final settings = await SupabaseService.instance.fetchAppSettings();
+      if (mounted) setState(() {
+        _monthlyExpense = double.tryParse(settings['monthly_expense'] ?? '0') ?? 0;
+        _allTimeExpense = double.tryParse(settings['all_time_expense'] ?? '0') ?? 0;
+      });
+    } catch (_) {}
+  }
+
   Future<void> _addToCurrentMonthRevenue(BuildContext context) async {
     if (!AdminPerms.i.guardEdit(AdminPageKeys.dashboard, what: 'editing revenue')) return;
     final amountCtrl = TextEditingController();
@@ -1257,16 +1275,223 @@ class _DashboardHomeState extends State<_DashboardHome> {
     if (confirmed != true) return;
     final amount = double.tryParse(amountCtrl.text.trim());
     if (amount == null || amount == 0) return;
+
+    // Step 2: ask Fully Paid or Partially Paid
+    final isPartial = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1A33),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Rs. ${amount.toInt()} — Payment Type', style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+        content: const Text('How should this payment be recorded?', style: TextStyle(color: Colors.white54, fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(_, null), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          TextButton(onPressed: () => Navigator.pop(_, true),  child: const Text('Partially Paid', style: TextStyle(color: Colors.orange, fontWeight: FontWeight.w800))),
+          TextButton(onPressed: () => Navigator.pop(_, false), child: const Text('Fully Paid',    style: TextStyle(color: kGreen,        fontWeight: FontWeight.w800))),
+        ],
+      ),
+    );
+    if (isPartial == null) return;
+
+    debugPrint('[REV] Adding Rs.${amount.toInt()} isPartial=$isPartial');
+
     final settings = await SupabaseService.instance.fetchAppSettings();
     final monthlyOffset = double.tryParse(settings['monthly_revenue_deleted_offset'] ?? '0') ?? 0;
     final allTimeOffset = double.tryParse(settings['deleted_users_revenue_offset'] ?? '0') ?? 0;
+
+    // Both types add to monthly + all-time revenue totals
     await Future.wait([
       SupabaseService.instance.client.from('app_settings')
           .upsert({'key': 'monthly_revenue_deleted_offset', 'value': (monthlyOffset + amount).toString()}),
       SupabaseService.instance.client.from('app_settings')
-          .upsert({'key': 'deleted_users_revenue_offset', 'value': (allTimeOffset + amount).toString()}),
+          .upsert({'key': 'deleted_users_revenue_offset',   'value': (allTimeOffset + amount).toString()}),
     ]);
-    svc.loadData();
+    debugPrint('[REV] offsets updated monthly=${monthlyOffset+amount} alltime=${allTimeOffset+amount}');
+
+    if (isPartial) {
+      // Track partially paid separately in monthly_revenue_log
+      final now = DateTime.now();
+      final existing = await SupabaseService.instance.client
+          .from('monthly_revenue_log')
+          .select('partially_paid_amount, total_revenue')
+          .eq('year', now.year).eq('month', now.month)
+          .maybeSingle();
+      final existingPartial = (existing?['partially_paid_amount'] as num?)?.toDouble() ?? 0;
+      final existingTotal   = (existing?['total_revenue']          as num?)?.toDouble() ?? 0;
+      // Use live monthly revenue as the new total so history shows correct figure
+      final newTotal = existingTotal + amount;
+      final newPartial = existingPartial + amount;
+      debugPrint('[REV] existing row: total=$existingTotal partial=$existingPartial rowExists=${existing != null}');
+      if (existing != null) {
+        await SupabaseService.instance.client.from('monthly_revenue_log')
+            .update({'partially_paid_amount': newPartial, 'total_revenue': newTotal})
+            .eq('year', now.year).eq('month', now.month);
+        debugPrint('[REV] updated total=$newTotal partial=$newPartial');
+      } else {
+        await SupabaseService.instance.client.from('monthly_revenue_log').insert({
+          'year': now.year, 'month': now.month,
+          'total_revenue': amount,
+          'partially_paid_amount': amount,
+        });
+        debugPrint('[REV] inserted new row total=$amount partial=$amount');
+      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Rs. ${amount.toInt()} added as Partially Paid'), backgroundColor: Colors.orange, duration: const Duration(seconds: 2)));
+    } else {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Rs. ${amount.toInt()} added as Fully Paid'), backgroundColor: kGreen, duration: const Duration(seconds: 2)));
+    }
+    await svc.loadData();
+    await _loadExpenses();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _addExpense(BuildContext context) async {
+    if (!AdminPerms.i.guardEdit(AdminPageKeys.dashboard, what: 'editing expenses')) return;
+    final amountCtrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1A33),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Add Expense', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+        content: TextField(
+          controller: amountCtrl,
+          keyboardType: const TextInputType.numberWithOptions(signed: true),
+          autofocus: true,
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+          decoration: InputDecoration(
+            prefixText: 'Rs. ',
+            prefixStyle: const TextStyle(color: Colors.white54),
+            hintText: 'e.g. 500',
+            hintStyle: const TextStyle(color: Colors.white24),
+            filled: true, fillColor: Colors.white.withOpacity(0.05),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(_, false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          TextButton(onPressed: () => Navigator.pop(_, true),  child: const Text('Add', style: TextStyle(color: kRose, fontWeight: FontWeight.w800))),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final amount = double.tryParse(amountCtrl.text.trim());
+    if (amount == null || amount == 0) return;
+    final settings = await SupabaseService.instance.fetchAppSettings();
+    final monthlyExp = double.tryParse(settings['monthly_expense']  ?? '0') ?? 0;
+    final allTimeExp = double.tryParse(settings['all_time_expense'] ?? '0') ?? 0;
+    await Future.wait([
+      SupabaseService.instance.client.from('app_settings').upsert({'key': 'monthly_expense',  'value': (monthlyExp  + amount).toString()}),
+      SupabaseService.instance.client.from('app_settings').upsert({'key': 'all_time_expense', 'value': (allTimeExp + amount).toString()}),
+    ]);
+    final now = DateTime.now();
+    final existing = await SupabaseService.instance.client
+        .from('monthly_revenue_log').select('expense_amount, total_revenue')
+        .eq('year', now.year).eq('month', now.month).maybeSingle();
+    final existingExp   = (existing?['expense_amount'] as num?)?.toDouble() ?? 0;
+    final existingTotal = (existing?['total_revenue']  as num?)?.toDouble() ?? 0;
+    if (existing != null) {
+      await SupabaseService.instance.client.from('monthly_revenue_log')
+          .update({'expense_amount': existingExp + amount}).eq('year', now.year).eq('month', now.month);
+    } else {
+      await SupabaseService.instance.client.from('monthly_revenue_log').insert({
+        'year': now.year, 'month': now.month, 'total_revenue': existingTotal, 'expense_amount': amount,
+      });
+    }
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Rs. ${amount.toInt()} expense added'), backgroundColor: kRose, duration: const Duration(seconds: 2)));
+    await _loadExpenses();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _showExpenseHistory(BuildContext context) async {
+    final history = await SupabaseService.instance.fetchMonthlyRevenueHistory();
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFF1E1A33),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Expense & Profit History', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white)),
+            const SizedBox(height: 4),
+            Text('Monthly breakdown', style: TextStyle(fontSize: 11.5, color: Colors.white.withOpacity(0.5))),
+            const SizedBox(height: 14),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 340),
+              child: Builder(builder: (_) {
+                final rows = history.where((r) {
+                  final exp = (r['expense_amount'] as num?)?.toDouble() ?? 0;
+                  final rev = (r['total_revenue']  as num?)?.toDouble() ?? 0;
+                  return exp > 0 || rev > 0;
+                }).toList();
+                if (rows.isEmpty) return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: Text('No data recorded yet', style: TextStyle(color: Colors.white38, fontSize: 13))),
+                );
+                return ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: rows.length,
+                  separatorBuilder: (_, __) => Divider(height: 1, color: Colors.white.withOpacity(0.06)),
+                  itemBuilder: (_, i) {
+                    final r = rows[i];
+                    final y   = r['year'] as int;
+                    final m   = r['month'] as int;
+                    final now3 = DateTime.now();
+                    final isCurrentMonth = y == now3.year && m == now3.month;
+                    // Current month: use live revenue (includes subscriptions), not the log snapshot
+                    final rev = isCurrentMonth ? _monthlyRevenue : ((r['total_revenue'] as num?)?.toDouble() ?? 0);
+                    final exp = (r['expense_amount']         as num?)?.toDouble() ?? 0;
+                    final net = rev - exp;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Text('${_monthNames[m]} $y', style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w700)),
+                          const Spacer(),
+                          Text('${net >= 0 ? '' : '-'}Rs. ${(net.abs() / 1).toStringAsFixed(0)}',
+                              style: TextStyle(color: net >= 0 ? kGreen : kRose, fontSize: 13.5, fontWeight: FontWeight.w800)),
+                        ]),
+                        if (exp > 0) ...[
+                          const SizedBox(height: 3),
+                          Row(children: [
+                            const SizedBox(width: 10),
+                            Text('Revenue', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 11)),
+                            const Spacer(),
+                            Text('Rs. ${rev.toInt()}', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11, fontWeight: FontWeight.w600)),
+                          ]),
+                          const SizedBox(height: 2),
+                          Row(children: [
+                            const SizedBox(width: 10),
+                            const Text('Expense', style: TextStyle(color: Color(0xFFEF4444), fontSize: 11)),
+                            const Spacer(),
+                            Text('- Rs. ${exp.toInt()}', style: const TextStyle(color: Color(0xFFEF4444), fontSize: 11, fontWeight: FontWeight.w600)),
+                          ]),
+                        ],
+                      ]),
+                    );
+                  },
+                );
+              }),
+            ),
+            const SizedBox(height: 14),
+            GestureDetector(
+              onTap: () => Navigator.pop(ctx),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
+                child: const Center(child: Text('Close', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 13))),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    );
   }
 
   Future<void> _showRevenueHistory(BuildContext context) async {
@@ -1315,7 +1540,10 @@ class _DashboardHomeState extends State<_DashboardHome> {
                         final r = rows[i];
                         final y = r['year'] as int;
                         final m = r['month'] as int;
-                        final revenue = (r['total_revenue'] as num?)?.toDouble() ?? 0;
+                        final now3 = DateTime.now();
+                        final isCurrentMonth = y == now3.year && m == now3.month;
+                        // For current month use live revenue (includes offset), not archived snapshot
+                        final revenue = isCurrentMonth ? _monthlyRevenue : ((r['total_revenue'] as num?)?.toDouble() ?? 0);
                         final revenueCtrl = TextEditingController(text: revenue.toInt().toString());
                         return GestureDetector(
                           onTap: () async {
@@ -1385,13 +1613,45 @@ class _DashboardHomeState extends State<_DashboardHome> {
                               },
                           child: Padding(
                             padding: const EdgeInsets.symmetric(vertical: 10),
-                            child: Row(children: [
-                              Text('${_monthNames[m]} $y', style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600)),
-                              const Spacer(),
-                              Text('Rs. ${revenue.toInt()}', style: const TextStyle(color: kGreen, fontSize: 13.5, fontWeight: FontWeight.w800)),
-                              const SizedBox(width: 6),
-                              const Icon(Icons.chevron_right_rounded, size: 16, color: Colors.white24),
-                            ]),
+                            child: Builder(builder: (_) {
+                              final partial = (r['partially_paid_amount'] as num?)?.toDouble() ?? 0;
+                              final expense = (r['expense_amount']          as num?)?.toDouble() ?? 0;
+                              final fully   = (revenue - partial).clamp(0, double.infinity);
+                              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Row(children: [
+                                  Text('${_monthNames[m]} $y', style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600)),
+                                  const Spacer(),
+                                  Text('Rs. ${revenue.toInt()}', style: const TextStyle(color: kGreen, fontSize: 13.5, fontWeight: FontWeight.w800)),
+                                  const SizedBox(width: 6),
+                                  const Icon(Icons.chevron_right_rounded, size: 16, color: Colors.white24),
+                                ]),
+                                if (partial > 0 || expense > 0) ...[
+                                  const SizedBox(height: 3),
+                                  if (partial > 0 && fully > 0) Row(children: [
+                                    const SizedBox(width: 10),
+                                    Text('Fully Paid', style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11)),
+                                    const Spacer(),
+                                    Text('Rs. ${fully.toInt()}', style: TextStyle(color: Colors.white.withOpacity(0.55), fontSize: 11, fontWeight: FontWeight.w600)),
+                                  ]),
+                                  if (partial > 0 && fully > 0) const SizedBox(height: 2),
+                                  if (partial > 0) Row(children: [
+                                    const SizedBox(width: 10),
+                                    const Text('Partially Paid', style: TextStyle(color: Colors.orange, fontSize: 11)),
+                                    const Spacer(),
+                                    Text('Rs. ${partial.toInt()}', style: const TextStyle(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.w600)),
+                                  ]),
+                                  if (expense > 0) ...[
+                                    const SizedBox(height: 2),
+                                    Row(children: [
+                                      const SizedBox(width: 10),
+                                      const Text('Expense', style: TextStyle(color: Color(0xFFEF4444), fontSize: 11)),
+                                      const Spacer(),
+                                      Text('- Rs. ${expense.toInt()}', style: const TextStyle(color: Color(0xFFEF4444), fontSize: 11, fontWeight: FontWeight.w600)),
+                                    ]),
+                                  ],
+                                ],
+                              ]);
+                            }),
                           ),
                         );
                       },
@@ -1491,8 +1751,8 @@ class _DashboardHomeState extends State<_DashboardHome> {
             rawValue: svc.totalAllTimeSubscribers,
             refreshKey: refreshKey,
             icon: Icons.people_alt_rounded,
-            color: const Color(0xFF2563EB),
-            bg: const Color(0xFF2563EB).withOpacity(0.12),
+            color: kPurple,
+            bg: kPurple.withOpacity(0.12),
           )),
           SizedBox(width: s.s(12)),
           Expanded(child: _BigStatCard(
@@ -1501,78 +1761,174 @@ class _DashboardHomeState extends State<_DashboardHome> {
             rawValue: svc.totalUniqueVisitors,
             refreshKey: refreshKey,
             icon: Icons.visibility_rounded,
-            color: const Color(0xFFD41B5E),
-            bg: const Color(0xFFD41B5E).withOpacity(0.12),
+            color: kPurple,
+            bg: kPurple.withOpacity(0.12),
           )),
         ]),
         SizedBox(height: s.s(12)),
         Row(children: [
-          Expanded(child: _BigStatCard(
-            label: 'All-Time Revenue',
-            value: 'Rs. ${_fmt(svc.allTimeRevenue)}',
-            rawValue: svc.allTimeRevenue.toInt(),
-            refreshKey: refreshKey,
-            icon: Icons.trending_up_rounded,
-            color: const Color(0xFFFFB200),
-            bg: const Color(0xFFFFB200).withOpacity(0.12),
+          // Revenue box (LEFT)
+          Expanded(child: Container(
+            padding: EdgeInsets.all(s.s(16)),
+            decoration: BoxDecoration(
+              color: const Color(0xFF16132A),
+              borderRadius: BorderRadius.circular(s.s(18)),
+              border: Border.all(color: Colors.white.withOpacity(0.07)),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Container(
+                  width: s.d(40), height: s.d(40),
+                  decoration: BoxDecoration(color: kPurple.withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(12))),
+                  child: Icon(Icons.payments_rounded, color: kPurple, size: s.d(22)),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () => _showRevenueHistory(context),
+                  child: Container(
+                    padding: EdgeInsets.all(s.s(6)),
+                    decoration: BoxDecoration(color: kPurple.withOpacity(0.08), borderRadius: BorderRadius.circular(s.s(8))),
+                    child: Icon(Icons.history_rounded, size: s.d(18), color: kPurple.withOpacity(0.6)),
+                  ),
+                ),
+              ]),
+              SizedBox(height: s.s(12)),
+              _CountUp(
+                end: _monthlyRevenue.toInt(), refreshKey: refreshKey, prefix: 'Rs. ',
+                style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w800, color: kPurple, letterSpacing: -0.5),
+              ),
+              Text('/ Rs. ${_fmt(svc.allTimeRevenue)} all-time',
+                  style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.35))),
+              SizedBox(height: s.s(2)),
+              Text('Revenue', style: TextStyle(fontSize: s.f(11.5), color: Colors.white.withOpacity(0.45))),
+            ]),
           )),
           SizedBox(width: s.s(12)),
-          Expanded(
-            child: Container(
-                padding: EdgeInsets.all(s.s(16)),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF16132A),
-                  borderRadius: BorderRadius.circular(s.s(18)),
-                  border: Border.all(color: Colors.white.withOpacity(0.07)),
-                ),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Container(
-                      width: s.d(40), height: s.d(40),
-                      decoration: BoxDecoration(
-                        color: _monthlyRevenue > 0 ? kGreen.withOpacity(0.12) : Colors.white.withOpacity(0.05),
-                        borderRadius: BorderRadius.circular(s.s(12)),
-                      ),
-                      child: Icon(Icons.payments_rounded,
-                        color: _monthlyRevenue > 0 ? kGreen : Colors.white24, size: s.d(22)),
-                    ),
-                    const Spacer(),
-                    Row(children: [
-                      GestureDetector(
-                        onTap: () => _addToCurrentMonthRevenue(context),
-                        child: Container(
-                          padding: EdgeInsets.all(s.s(6)),
-                          decoration: BoxDecoration(color: kPurple.withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(8))),
-                          child: Icon(Icons.add_rounded, size: s.d(18), color: kPurple),
-                        ),
-                      ),
-                      SizedBox(width: s.s(6)),
-                      GestureDetector(
-                        onTap: () => _showRevenueHistory(context),
-                        child: Container(
-                          padding: EdgeInsets.all(s.s(6)),
-                          decoration: BoxDecoration(color: kPurple.withOpacity(0.08), borderRadius: BorderRadius.circular(s.s(8))),
-                          child: Icon(Icons.history_rounded, size: s.d(18), color: kPurple.withOpacity(0.6)),
-                        ),
-                      ),
-                    ]),
-                  ]),
-                  SizedBox(height: s.s(12)),
-                  _CountUp(
-                    end: _monthlyRevenue.toInt(),
-                    refreshKey: refreshKey,
-                    prefix: 'Rs. ',
-                    style: TextStyle(
-                      fontSize: s.f(22), fontWeight: FontWeight.w800,
-                      color: _monthlyRevenue > 0 ? kGreen : Colors.white24,
-                      letterSpacing: -0.5,
+          // Net Profit/Loss box (RIGHT)
+          Expanded(child: Builder(builder: (_) {
+            final monthlyNet = _monthlyRevenue - _monthlyExpense;
+            final allTimeNet = svc.allTimeRevenue - _allTimeExpense;
+            final mProfit = monthlyNet >= 0;
+            return Container(
+              padding: EdgeInsets.all(s.s(16)),
+              decoration: BoxDecoration(
+                color: const Color(0xFF16132A),
+                borderRadius: BorderRadius.circular(s.s(18)),
+                border: Border.all(color: Colors.white.withOpacity(0.07)),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Container(
+                    width: s.d(40), height: s.d(40),
+                    decoration: BoxDecoration(
+                      color: (mProfit ? kGreen : kRose).withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(s.s(12))),
+                    child: Icon(mProfit ? Icons.trending_up_rounded : Icons.trending_down_rounded,
+                        color: mProfit ? kGreen : kRose, size: s.d(22)),
+                  ),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => _showExpenseHistory(context),
+                    child: Container(
+                      padding: EdgeInsets.all(s.s(6)),
+                      decoration: BoxDecoration(color: kPurple.withOpacity(0.08), borderRadius: BorderRadius.circular(s.s(8))),
+                      child: Icon(Icons.history_rounded, size: s.d(18), color: kPurple.withOpacity(0.6)),
                     ),
                   ),
-                  SizedBox(height: s.s(2)),
-                  Text('Monthly Revenue', style: TextStyle(fontSize: s.f(11.5), color: Colors.white.withOpacity(0.45))),
                 ]),
-              ),
+                SizedBox(height: s.s(12)),
+                Text('${mProfit ? '' : '-'}Rs. ${_fmt(monthlyNet.abs())}',
+                    style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w800, letterSpacing: -0.5,
+                        color: mProfit ? kGreen : kRose)),
+                Text('/ ${allTimeNet >= 0 ? '' : '-'}${_fmt(allTimeNet.abs())} all-time',
+                    style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.35))),
+                SizedBox(height: s.s(2)),
+                Text(mProfit ? 'Net Profit' : 'Net Loss',
+                    style: TextStyle(fontSize: s.f(11.5), color: Colors.white.withOpacity(0.45))),
+              ]),
+            );
+          })),
+        ]),
+        SizedBox(height: s.s(12)),
+        Row(children: [
+          // Expense box (LEFT)
+          Expanded(child: Container(
+            padding: EdgeInsets.all(s.s(16)),
+            decoration: BoxDecoration(
+              color: const Color(0xFF16132A),
+              borderRadius: BorderRadius.circular(s.s(18)),
+              border: Border.all(color: Colors.white.withOpacity(0.07)),
             ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Container(
+                  width: s.d(40), height: s.d(40),
+                  decoration: BoxDecoration(color: kPurple.withOpacity(0.12), borderRadius: BorderRadius.circular(s.s(12))),
+                  child: Icon(Icons.payments_rounded, color: kPurple, size: s.d(22)),
+                ),
+                const Spacer(),
+              ]),
+              SizedBox(height: s.s(12)),
+              Text('Rs. ${_fmt(_monthlyExpense)}',
+                  style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w800, color: kPurple, letterSpacing: -0.5)),
+              Text('/ ${_fmt(_allTimeExpense)} all-time',
+                  style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.35))),
+              SizedBox(height: s.s(2)),
+              Text('Expenses', style: TextStyle(fontSize: s.f(11.5), color: Colors.white.withOpacity(0.45))),
+            ]),
+          )),
+          SizedBox(width: s.s(12)),
+          // Quick Add box (RIGHT) — same structure as other boxes
+          Expanded(child: GestureDetector(
+            onTap: () async {
+              final choice = await showMenu<String>(
+                context: context,
+                position: RelativeRect.fromLTRB(
+                  MediaQuery.of(context).size.width / 2,
+                  MediaQuery.of(context).size.height * 0.6,
+                  16, 0),
+                color: const Color(0xFF1E1A33),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                items: [
+                  PopupMenuItem(value: 'revenue', child: Row(children: [
+                    Icon(Icons.payments_rounded, size: 16, color: kPurple),
+                    const SizedBox(width: 10),
+                    const Text('Add Monthly Revenue', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                  ])),
+                  PopupMenuItem(value: 'expense', child: Row(children: [
+                    Icon(Icons.payments_rounded, size: 16, color: kPurple),
+                    const SizedBox(width: 10),
+                    const Text('Add Monthly Expense', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                  ])),
+                ],
+              );
+              if (choice == 'revenue') _addToCurrentMonthRevenue(context);
+              if (choice == 'expense') _addExpense(context);
+            },
+            child: Container(
+              padding: EdgeInsets.all(s.s(16)),
+              decoration: BoxDecoration(
+                color: const Color(0xFF16132A),
+                borderRadius: BorderRadius.circular(s.s(18)),
+                border: Border.all(color: Colors.white.withOpacity(0.07)),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Container(
+                  width: s.d(40), height: s.d(40),
+                  decoration: BoxDecoration(
+                    color: kPurple.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(s.s(12)),
+                  ),
+                  child: Icon(Icons.add_rounded, size: s.d(22), color: kPurple),
+                ),
+                SizedBox(height: s.s(12)),
+                Text('Quick Add', style: TextStyle(fontSize: s.f(18), fontWeight: FontWeight.w800, color: kPurple, letterSpacing: -0.5)),
+                Text('Revenue or Expense', style: TextStyle(fontSize: s.f(11), color: Colors.white.withOpacity(0.35))),
+                SizedBox(height: s.s(2)),
+                Text('Tap to add', style: TextStyle(fontSize: s.f(11.5), color: Colors.white.withOpacity(0.45))),
+              ]),
+            ),
+          )),
         ]),
         SizedBox(height: s.s(24)),
         Row(children: [

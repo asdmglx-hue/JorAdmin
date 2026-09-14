@@ -871,7 +871,7 @@ class SupabaseService extends ChangeNotifier {
   Future<List<Map<String, dynamic>>> fetchMonthlyRevenueHistory() async {
     final res = await _client
         .from('monthly_revenue_log')
-        .select('year, month, total_revenue')
+        .select('year, month, total_revenue, partially_paid_amount, expense_amount')
         .order('year', ascending: false)
         .order('month', ascending: false);
     return List<Map<String, dynamic>>.from(res as List);

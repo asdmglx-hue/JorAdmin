@@ -219,7 +219,7 @@ class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
       builder: (_, __) {
         final q = _search.toLowerCase();
         final allPending  = widget.svc.users.where((u) => u.status == ProposalStatus.pending && !u.isOrderArchived && u.adminNotes != 'AI_IMPORTED' && u.submissionSource != 'ai_batch').toList();
-        final allApproved = widget.svc.users.where((u) => (u.status == ProposalStatus.approved || u.status == ProposalStatus.active)).toList();
+        final allApproved = widget.svc.users.where((u) => (u.status == ProposalStatus.approved || u.status == ProposalStatus.active) && u.subscriptionStatus != SubscriptionStatus.docPending && u.subscriptionStatus != SubscriptionStatus.inactive).toList();
         final allArchived = widget.svc.users.where((u) => u.isOrderArchived).toList();
         final allInactive = widget.svc.users.where((u) =>
             u.status != ProposalStatus.pending &&
@@ -303,7 +303,7 @@ class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
                     tabBtn('Pending', allPending.length, 0),
                     tabBtn('Archived', allArchived.length, 2),
                     tabBtn('View Only', allInactive.length, 3),
-                    tabBtn('AI', allAI.length, 4),
+                    tabBtn('AI', widget.svc.aiRealTotal > 0 ? widget.svc.aiRealTotal : allAI.length, 4),
                     tabBtn('Approved', allApproved.length, 1),
                   ]),
                   SizedBox(height: _S.of(context).s(10)),
@@ -742,14 +742,21 @@ class _PendingCard extends StatelessWidget {
                           Builder(builder: (context) {
                             final isPaid = user.subscriptionStatus == SubscriptionStatus.active;
                             final isRefunded = user.subscriptionStatus == SubscriptionStatus.refunded;
+                            final isPartiallyPaid = user.paymentProofStatus == 'partially_paid';
                             final hasValidProof = (user.paymentProofUrl?.isNotEmpty ?? false) &&
-                                user.paymentProofStatus != 'rejected';
-                            final showGreen = isPaid || hasValidProof;
-                            final Color tagColor = isRefunded ? kRose : showGreen ? kGreen : kRose;
+                                user.paymentProofStatus != 'rejected' &&
+                                user.paymentProofStatus != 'partially_paid';
+                            final showGreen = isPaid || (hasValidProof && !isPartiallyPaid);
+                            final Color tagColor = isRefunded ? kRose
+                                : isPartiallyPaid ? Colors.orange
+                                : showGreen ? kGreen : kRose;
                             final IconData tagIcon = isRefunded ? Icons.replay_rounded
+                                : isPartiallyPaid ? Icons.warning_amber_rounded
                                 : showGreen ? Icons.attach_money
                                 : Icons.money_off_csred;
-                            final String tagLabel = isRefunded ? 'Refunded' : showGreen ? 'Paid' : 'Unpaid';
+                            final String tagLabel = isRefunded ? 'Refunded'
+                                : isPartiallyPaid ? 'Partially Paid'
+                                : showGreen ? 'Paid' : 'Unpaid';
                             return Container(
                               padding: EdgeInsets.symmetric(horizontal: _S.of(context).s(7), vertical: _S.of(context).s(2)),
                               decoration: BoxDecoration(color: tagColor.withOpacity(0.15), borderRadius: BorderRadius.circular(_S.of(context).s(7))),
@@ -861,6 +868,35 @@ class _PendingCard extends StatelessWidget {
             label: 'Submitted ${_timeAgo(user.postedAt)}'
                 '${user.submissionSource == 'android' ? ' via Android App' : user.submissionSource == 'website' ? ' via Website' : ''}',
           ),
+          Builder(builder: (_) {
+            final lastSeen = user.lastSeenAt;
+            if (lastSeen == null) return const SizedBox.shrink();
+            final diff = DateTime.now().difference(lastSeen);
+            final isOnline = diff.inMinutes <= 5;
+            final label = isOnline ? 'Online now'
+                : diff.inMinutes < 60 ? 'Online ${diff.inMinutes}m ago'
+                : diff.inHours < 24 ? 'Online ${diff.inHours}h ago'
+                : 'Online ${diff.inDays}d ago';
+            return Padding(
+              padding: EdgeInsets.only(top: _S.of(context).s(4)),
+              child: Row(children: [
+                Container(
+                  width: _S.of(context).d(7),
+                  height: _S.of(context).d(7),
+                  decoration: BoxDecoration(
+                    color: isOnline ? const Color(0xFF22C55E) : Colors.white.withOpacity(0.3),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                SizedBox(width: _S.of(context).s(6)),
+                Text(label, style: TextStyle(
+                  fontSize: _S.of(context).f(11.5),
+                  color: isOnline ? const Color(0xFF22C55E) : Colors.white.withOpacity(0.4),
+                  fontWeight: isOnline ? FontWeight.w600 : FontWeight.w400,
+                )),
+              ]),
+            );
+          }),
           if (user.appliedCouponCode != null && user.appliedCouponCode!.isNotEmpty) ...[
             SizedBox(height: _S.of(context).s(4)),
             Container(
@@ -912,7 +948,8 @@ class _PendingCard extends StatelessWidget {
                   }
 
                   // View Only → Restore to Pending
-                  final isViewOnly = user.status == ProposalStatus.active &&
+                  final isViewOnly = user.status != ProposalStatus.pending &&
+                      user.status != ProposalStatus.deleted &&
                       (user.subscriptionStatus == SubscriptionStatus.inactive ||
                        user.subscriptionStatus == SubscriptionStatus.docPending);
                   if (isViewOnly) {
@@ -1025,7 +1062,12 @@ class _PendingCard extends StatelessWidget {
                     if (choice == 'archive') {
                       await svc.setOrderArchived(user.id, true);
                     } else if (choice == 'viewonly') {
-                      svc.approveProposal(user.id);
+                      await SupabaseService.instance.client.from('proposals').update({
+                        'status': 'active',
+                        'subscription_status': 'doc_pending',
+                        'is_order_archived': false,
+                      }).eq('id', user.id);
+                      svc.notifyListeners();
                     } else if (choice == 'approve') {
                       svc.approveProposal(user.id);
                     }
@@ -1110,7 +1152,8 @@ class _PendingCard extends StatelessWidget {
                     svc.markDeleted(user.id, from: 'orders');
                   } else {
                     // Check if this is a View Only profile — stamp so restore sends it back to View Only
-                    final isViewOnly = user.status == ProposalStatus.active &&
+                    final isViewOnly = user.status != ProposalStatus.pending &&
+                        user.status != ProposalStatus.deleted &&
                         (user.subscriptionStatus == SubscriptionStatus.inactive ||
                          user.subscriptionStatus == SubscriptionStatus.docPending);
                     if (isViewOnly) {
