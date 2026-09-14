@@ -42,7 +42,7 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
   final _searchCtrl = TextEditingController();
   bool _refreshing = false;
 
-  String get _title => widget.source == 'orders' ? 'Rejected Proposals' : widget.source == 'affiliates' ? 'Deleted Affiliates' : 'Deleted Users';
+  String get _title => widget.source == 'orders' ? 'Rejected Proposals' : widget.source == 'self' ? 'Self-Deleted Profiles' : widget.source == 'affiliates' ? 'Deleted Affiliates' : 'Deleted Users';
 
   AutoRefreshSync? _sync;
 
@@ -246,7 +246,7 @@ class _AdminTrashScreenState extends State<AdminTrashScreen> {
         if (widget.source == 'affiliates') return _buildAffiliateTrash(s);
 
         final allDeleted = widget.svc.users
-            .where((u) => u.status == ProposalStatus.deleted && u.deletedFrom == widget.source)
+            .where((u) => u.status == ProposalStatus.deleted && (u.deletedFrom == widget.source || (widget.source == 'orders' && u.deletedFrom == 'self')))
             .toList();
         final q = _search.toLowerCase();
         final numSearch = _search.startsWith('#') ? int.tryParse(_search.substring(1)) : null;
@@ -644,6 +644,14 @@ class _TrashCard extends StatelessWidget {
                         style: TextStyle(fontSize: s.f(12), color: Colors.white.withOpacity(0.35)),
                         maxLines: 1, overflow: TextOverflow.ellipsis,
                       ),
+                      if (user.authPhone != null && user.authPhone!.isNotEmpty) ...[
+                        SizedBox(height: s.s(2)),
+                        Row(children: [
+                          Icon(Icons.phone_rounded, size: s.d(11), color: Colors.white.withOpacity(0.3)),
+                          SizedBox(width: s.s(4)),
+                          Text(user.authPhone!, style: TextStyle(fontSize: s.f(11.5), color: Colors.white.withOpacity(0.35))),
+                        ]),
+                      ],
                     ],
                   ),
                 ),
