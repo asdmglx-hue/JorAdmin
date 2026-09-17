@@ -223,6 +223,7 @@ class _AdminProposalsScreenState extends State<AdminProposalsScreen> {
         final allArchived = widget.svc.users.where((u) => u.isOrderArchived).toList();
         final allInactive = widget.svc.users.where((u) =>
             u.status != ProposalStatus.pending &&
+            u.status != ProposalStatus.deleted &&
             (u.subscriptionStatus == SubscriptionStatus.docPending ||
              u.subscriptionStatus == SubscriptionStatus.inactive) &&
             !u.isOrderArchived &&
@@ -1066,6 +1067,7 @@ class _PendingCard extends StatelessWidget {
                         'status': 'active',
                         'subscription_status': 'doc_pending',
                         'is_order_archived': false,
+                        'approved_at': DateTime.now().toUtc().toIso8601String(),
                       }).eq('id', user.id);
                       svc.notifyListeners();
                     } else if (choice == 'approve') {

@@ -584,7 +584,6 @@ bool _hasNonCompulsoryPending(AdminUser u) {
 // True when user has doc_pending subscription AND has submitted at least one
 // compulsory doc that is now pending admin review — signals the red dot on eye icon.
 bool _hasCompulsoryDocPending(AdminUser u) {
-  if (u.subscriptionStatus != SubscriptionStatus.docPending) return false;
   final s = SupabaseService.instance.cachedSettings;
   final dv = u.docVerification;
   for (final entry in _verifDocKeys.entries) {
@@ -767,8 +766,21 @@ class _UserCardState extends State<UserCard> {
                           decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(s.s(8))),
                           child: Icon(Icons.remove_red_eye_outlined, size: s.d(16), color: Colors.white.withOpacity(0.5)),
                         ),
-                        if (_hasNonCompulsoryPending(user) || _hasCompulsoryDocPending(user) ||
-                            ((user.paymentProofUrl?.isNotEmpty ?? false) && user.paymentProofStatus == 'pending'))
+                        if ((() {
+                          // Red dot: any uploaded doc not yet approved, or payment proof pending
+                          final dv = user.docVerification;
+                          final docKeys = <String?, String>{
+                            user.cnicFront: 'cnic_front',
+                            user.cnicBack: 'cnic_back',
+                            user.educationDocument: 'education_document',
+                            user.guardianCnicFront: 'guardian_cnic_front',
+                            user.guardianCnicBack: 'guardian_cnic_back',
+                          };
+                          final hasUnapprovedDoc = docKeys.entries.any((e) =>
+                            (e.key?.isNotEmpty ?? false) && dv[e.value] != 'approved');
+                          final hasPaymentPending = (user.paymentProofUrl?.isNotEmpty ?? false) && user.paymentProofStatus == 'pending';
+                          return hasUnapprovedDoc || hasPaymentPending;
+                        })())
                           Positioned(
                             top: -2, right: -2,
                             child: Container(
@@ -1049,16 +1061,84 @@ class _UserCardState extends State<UserCard> {
                   )
                 else
                   const SizedBox.shrink(),
+                if (AdminPerms.i.canEdit(AdminPageKeys.users) && user.subscriptionStatus == SubscriptionStatus.expired) ...[
+                  const SizedBox(width: 8),
+                  if (user.status != ProposalStatus.paused)
+                    _ActionBtn(
+                      icon: Icons.pause_rounded,
+                      label: 'Pause',
+                      color: kTeal,
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        showDialog(
+                          context: context,
+                          builder: (_) => AlertDialog(
+                            backgroundColor: const Color(0xFF16132A),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                            title: const Text('Pause Profile?',
+                                style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                            content: Text(
+                              '${user.name}\'s profile will be hidden from the feed. You can resume it anytime.',
+                              style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5))),
+                              ),
+                              TextButton(
+                                onPressed: () { Navigator.pop(context); HapticFeedback.heavyImpact(); svc.pauseUser(user.id); },
+                                child: const Text('Pause', style: TextStyle(color: kTeal, fontWeight: FontWeight.w700)),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    )
+                  else
+                    _ActionBtn(
+                      icon: Icons.play_arrow_rounded,
+                      label: 'Resume',
+                      color: kGreen,
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        showDialog(
+                          context: context,
+                          builder: (_) => AlertDialog(
+                            backgroundColor: const Color(0xFF16132A),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                            title: const Text('Resume Profile?',
+                                style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                            content: Text(
+                              '${user.name}\'s profile will be visible in the feed again.',
+                              style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5))),
+                              ),
+                              TextButton(
+                                onPressed: () { Navigator.pop(context); HapticFeedback.heavyImpact(); svc.activateUser(user.id); },
+                                child: const Text('Resume', style: TextStyle(color: kGreen, fontWeight: FontWeight.w700)),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                ],
                 const SizedBox(width: 8),
                 if (AdminPerms.i.canEdit(AdminPageKeys.users)) ...[
-                  _ActionBtn(
-                    icon: Icons.star_rounded,
-                    label: 'Featured',
-                    color: kAmber,
-                    disabled: user.subscriptionStatus == SubscriptionStatus.expired,
-                    onTap: () => _showFeaturedSheet(context),
-                  ),
-                  const SizedBox(width: 8),
+                  if (user.subscriptionStatus != SubscriptionStatus.expired) ...[
+                    _ActionBtn(
+                      icon: Icons.star_rounded,
+                      label: 'Featured',
+                      color: kAmber,
+                      onTap: () => _showFeaturedSheet(context),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                   _ActionBtn(icon: Icons.delete_outline_rounded, label: 'Trash', color: kRose, onTap: () => _confirmDelete(context)),
                 ],
               ]);
